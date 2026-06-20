@@ -12,28 +12,281 @@
  */
 
 const SNH = { fieldNamesOn: false, transIconsOn: false };
+const SNH_FRAME_COMMAND_SOURCE = "SN_DEV_HELPER_FRAME_COMMAND";
+const WORKSPACE_FIELD_ATTRS = [
+  "data-field-name",
+  "data-fieldname",
+  "data-field",
+  "field-name",
+  "fieldname",
+  "field",
+  "data-column-name",
+  "data-column",
+  "column-name",
+  "column",
+  "data-name",
+  "name",
+];
+const WORKSPACE_FIELD_DENYLIST = new Set([
+  "actions",
+  "append",
+  "backward",
+  "bottom",
+  "button",
+  "checkbox",
+  "clear",
+  "combobox",
+  "content",
+  "control",
+  "controls",
+  "default",
+  "end",
+  "error",
+  "footer",
+  "form",
+  "forward",
+  "header",
+  "help",
+  "icon",
+  "input",
+  "label",
+  "leading",
+  "left",
+  "list",
+  "menu",
+  "message",
+  "prepend",
+  "record",
+  "right",
+  "search",
+  "start",
+  "suffix",
+  "table",
+  "text",
+  "top",
+  "trailing",
+  "trigger",
+  "value",
+]);
+
+function handleFrameCommand(type) {
+  if (type === "TOGGLE_FIELD_NAMES") return toggleFieldNames();
+  if (type === "TOGGLE_TRANSLATIONS") return toggleTranslationIcons();
+  return null;
+}
+
+function broadcastFrameCommand(type) {
+  chrome.runtime.sendMessage({ type });
+}
+
+window.addEventListener("message", (event) => {
+  const msg = event.data;
+  if (!msg || msg.source !== SNH_FRAME_COMMAND_SOURCE) return;
+  if (event.origin && event.origin !== location.origin) return;
+
+  handleFrameCommand(msg.type);
+});
+
+function decodedVariants(text) {
+  const values = [];
+  let value = String(text || "");
+  for (let i = 0; i < 3 && value; i++) {
+    values.push(value);
+    try {
+      const decoded = decodeURIComponent(value);
+      if (decoded === value) break;
+      value = decoded;
+    } catch (e) {
+      break;
+    }
+  }
+  return values;
+}
+
+function recordContextFromText(text) {
+  for (const value of decodedVariants(text)) {
+    const workspace = value.match(
+      /\/now\/(?:[^/?#]+\/)*record\/([^/?#]+)\/([0-9a-f]{32})(?:[/?#]|$)/i
+    );
+    if (workspace) return { table: workspace[1], sysId: workspace[2] };
+
+    const classic = value.match(/\/([a-z][a-z0-9_]*)\.do(?:[?#]|$)/i);
+    const sysId = sysIdFromText(value);
+    if (classic) return { table: classic[1], sysId };
+  }
+  return { table: null, sysId: sysIdFromText(text) };
+}
+
+function isTechnicalFieldName(value) {
+  if (!value) return false;
+  const text = String(value).trim();
+  if (!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?$/i.test(text)) return false;
+  return !WORKSPACE_FIELD_DENYLIST.has(text.toLowerCase());
+}
+
+function parseClassicLabel(labelEl) {
+  const parts = labelEl.id.split(".");
+  if (parts.length < 3) return null;
+  return {
+    table: parts[1],
+    field: parts.slice(2).join("."),
+    target: labelEl,
+  };
+}
+
+function walkRoots(root, visit) {
+  if (!root || !root.querySelectorAll) return;
+  visit(root);
+  root.querySelectorAll("*").forEach((el) => {
+    if (el.shadowRoot) walkRoots(el.shadowRoot, visit);
+  });
+}
+
+function getWorkspaceFieldInfo(el, context) {
+  for (const attr of WORKSPACE_FIELD_ATTRS) {
+    const raw = el.getAttribute && el.getAttribute(attr);
+    if (!raw) continue;
+
+    let value = raw.trim();
+    if (value.includes(".") && context.table && value.startsWith(context.table + ".")) {
+      value = value.slice(context.table.length + 1);
+    }
+    if (!isTechnicalFieldName(value)) continue;
+
+    if (
+      ["name", "field", "data-name"].includes(attr) &&
+      !isLikelyWorkspaceFieldElement(el)
+    ) {
+      continue;
+    }
+    return {
+      table: context.table,
+      field: value,
+      target: findWorkspaceInsertTarget(el),
+    };
+  }
+  return null;
+}
+
+function isServiceNowComponent(el) {
+  const name = el.localName || "";
+  return name.startsWith("now-") || name.startsWith("sn-") || name.includes("record");
+}
+
+function isInsideServiceNowShadow(el) {
+  const root = el.getRootNode && el.getRootNode();
+  return root && root.host && isServiceNowComponent(root.host);
+}
+
+function isLikelyWorkspaceFieldElement(el) {
+  if (isServiceNowComponent(el) || isInsideServiceNowShadow(el)) return true;
+
+  const role = el.getAttribute && el.getAttribute("role");
+  if (["textbox", "combobox", "checkbox", "spinbutton"].includes(role)) return true;
+
+  const tag = el.localName || "";
+  if (["input", "textarea", "select"].includes(tag)) return true;
+
+  return Boolean(
+    el.closest &&
+      el.closest(
+        'now-record-form-field,now-record-reference,sn-record-form-field,[data-component-id*="field" i],[class*="field" i]'
+      )
+  );
+}
+
+function findWorkspaceInsertTarget(el) {
+  if (el.shadowRoot) {
+    const label = el.shadowRoot.querySelector(
+      'label,[part~="label"],[class*="label" i],[data-label]'
+    );
+    if (label) return label;
+  }
+
+  const labelled = el.closest &&
+    el.closest('label,[data-field-name],[data-fieldname],[data-field],[field-name],[fieldname],[field]');
+  if (labelled) return labelled;
+
+  const root = el.getRootNode && el.getRootNode();
+  if (root && root.querySelector) {
+    const label = root.querySelector(
+      'label,[part~="label"],[class*="label" i],[data-label]'
+    );
+    if (label) return label;
+  }
+
+  if (["input", "textarea", "select"].includes(el.localName)) {
+    return el.parentElement || (root && root.host) || el;
+  }
+  return el;
+}
+
+function appendFieldBadge(target, field, extraClass) {
+  const badge = document.createElement("span");
+  badge.className = "snh-fieldname" + (extraClass ? " " + extraClass : "");
+  badge.textContent = " [" + field + "]";
+  badge.style.cssText =
+    "color:#0a7d4f;font-size:11px;font-weight:700;margin-left:5px;" +
+    "font-family:monospace;letter-spacing:.2px;";
+  target.appendChild(badge);
+}
+
+function getClassicFields() {
+  return Array.from(document.querySelectorAll('[id^="label."]'))
+    .map(parseClassicLabel)
+    .filter(Boolean);
+}
+
+function getWorkspaceFields() {
+  const context = recordContextFromText(location.href);
+  if (!context.table) return [];
+
+  const fields = [];
+  const seen = new WeakMap();
+  walkRoots(document, (root) => {
+    root.querySelectorAll("*").forEach((el) => {
+      if (el.classList && (el.classList.contains("snh-fieldname") || el.classList.contains("snh-trans-icon"))) {
+        return;
+      }
+      const info = getWorkspaceFieldInfo(el, context);
+      if (!info || !info.target) return;
+
+      let targetFields = seen.get(info.target);
+      if (!targetFields) {
+        targetFields = new Set();
+        seen.set(info.target, targetFields);
+      }
+      if (targetFields.has(info.field)) return;
+      targetFields.add(info.field);
+      fields.push(info);
+    });
+  });
+  return fields;
+}
+
+function removeSnhElements(selector) {
+  document.querySelectorAll(selector).forEach((n) => n.remove());
+  walkRoots(document, (root) => {
+    if (root === document) return;
+    root.querySelectorAll(selector).forEach((n) => n.remove());
+  });
+}
 
 function toggleFieldNames(force) {
   const turnOn = typeof force === "boolean" ? force : !SNH.fieldNamesOn;
   SNH.fieldNamesOn = turnOn;
 
-  // Clear any existing badges first (idempotent).
-  document.querySelectorAll(".snh-fieldname").forEach((n) => n.remove());
+  removeSnhElements(".snh-fieldname");
   if (!turnOn) return 0;
 
   let count = 0;
-  // Classic form labels carry an id of the form: label.<table>.<field>
-  document.querySelectorAll('[id^="label."]').forEach((labelEl) => {
-    const parts = labelEl.id.split(".");
-    if (parts.length < 3) return;
-    const field = parts.slice(2).join("."); // dotted (dot-walked) fields too
-    const badge = document.createElement("span");
-    badge.className = "snh-fieldname";
-    badge.textContent = " [" + field + "]";
-    badge.style.cssText =
-      "color:#0a7d4f;font-size:11px;font-weight:700;margin-left:5px;" +
-      "font-family:monospace;letter-spacing:.2px;";
-    labelEl.appendChild(badge);
+  getClassicFields().forEach(({ field, target }) => {
+    appendFieldBadge(target, field);
+    count++;
+  });
+
+  getWorkspaceFields().forEach(({ field, target }) => {
+    appendFieldBadge(target, field, "snh-workspace-fieldname");
     count++;
   });
   return count;
@@ -114,6 +367,28 @@ function openList(table, query) {
   chrome.runtime.sendMessage({ type: "OPEN_URL", url });
 }
 
+function sysIdFromText(text) {
+  if (!text) return null;
+  let value = String(text);
+  for (let i = 0; i < 3; i++) {
+    const workspaceMatch = value.match(
+      /\/now\/(?:[^/?#]+\/)*record\/[^/?#]+\/([0-9a-f]{32})(?:[/?#]|$)/i
+    );
+    if (workspaceMatch) return workspaceMatch[1];
+
+    const match = value.match(/(?:[?&]sys_id=|sys_id=)([0-9a-f]{32})/i);
+    if (match) return match[1];
+    try {
+      const decoded = decodeURIComponent(value);
+      if (decoded === value) break;
+      value = decoded;
+    } catch (e) {
+      break;
+    }
+  }
+  return null;
+}
+
 async function openLabelTranslations(formTable, field) {
   let table = formTable;
   try {
@@ -128,7 +403,7 @@ async function openLabelTranslations(formTable, field) {
 function openValueTranslations(formTable, field) {
   // Prefer the current record's sys_id (from the form URL) so we land on the
   // values for THIS record; documentkey + fieldname is table-agnostic.
-  const sysId = new URLSearchParams(location.search).get("sys_id");
+  const sysId = sysIdFromText(location.href);
   const query =
     sysId && /^[0-9a-f]{32}$/i.test(sysId)
       ? `documentkey=${sysId}^fieldname=${field}`
@@ -164,17 +439,13 @@ function toggleTranslationIcons(force) {
   const turnOn = typeof force === "boolean" ? force : !SNH.transIconsOn;
   SNH.transIconsOn = turnOn;
 
-  document.querySelectorAll(".snh-trans-icon").forEach((n) => n.remove());
+  removeSnhElements(".snh-trans-icon");
   if (!turnOn) return 0;
 
   let count = 0;
-  document.querySelectorAll('[id^="label."]').forEach((labelEl) => {
-    const parts = labelEl.id.split(".");
-    if (parts.length < 3) return;
-    const table = parts[1];
-    const field = parts.slice(2).join(".");
-
-    labelEl.appendChild(
+  const appendIcons = ({ table, field, target }) => {
+    if (!table || !field || !target) return;
+    target.appendChild(
       makeIcon(
         ICON_DOC,
         `Label translations for ${table}.${field} (sys_documentation)`,
@@ -182,7 +453,7 @@ function toggleTranslationIcons(force) {
         () => openLabelTranslations(table, field)
       )
     );
-    labelEl.appendChild(
+    target.appendChild(
       makeIcon(
         ICON_VALUE,
         `Value translations for ${table}.${field} (sys_translated_text)`,
@@ -191,7 +462,10 @@ function toggleTranslationIcons(force) {
       )
     );
     count++;
-  });
+  };
+
+  getClassicFields().forEach(appendIcons);
+  getWorkspaceFields().forEach(appendIcons);
   return count;
 }
 
@@ -204,6 +478,436 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const count = toggleTranslationIcons(msg.force);
     sendResponse({ ok: true, count, on: SNH.transIconsOn });
   }
-  // return true keeps the message channel open for the async sendResponse
+  if (msg && msg.type === "TOGGLE_PALETTE") {
+    // Only the top frame owns the palette to avoid duplicate overlays.
+    if (window === window.top) togglePalette();
+  }
   return true;
 });
+
+function togglePalette() {
+  paletteHost ? closePalette() : openPalette();
+}
+
+/* =====================================================================
+ * COMMAND PALETTE
+ * Rendered into a shadow root so SN styles can't bleed in.
+ * Only mounted in the top frame (shell); messages dispatched down to
+ * gsft_main frames for DOM-touching commands via chrome.runtime.sendMessage.
+ * ===================================================================== */
+
+const DEV_LINKS = [
+  ["Background Scripts",  "/sys.scripts.modern.do"],
+  ["Script Includes",     "/sys_script_include_list.do"],
+  ["Business Rules",      "/sys_script_list.do"],
+  ["Client Scripts",      "/sys_script_client_list.do"],
+  ["UI Actions",          "/sys_ui_action_list.do"],
+  ["System Logs",         "/syslog_list.do?sysparm_query=ORDERBYDESCsys_created_on"],
+  ["Update Sets",         "/sys_update_set_list.do"],
+  ["Scheduled Jobs",      "/sysauto_script_list.do"],
+  ["Fix Scripts",         "/sys_script_fix_list.do"],
+  ["Sys Properties",      "/sys_properties_list.do"],
+  ["REST Explorer",       "/$restapi.do"],
+  ["Flow Designer",       "/$flow-designer.do"],
+];
+
+function buildCommands() {
+  const navTo = (path) =>
+    chrome.runtime.sendMessage({ type: "OPEN_URL", url: location.origin + path });
+
+  const cmds = [
+    {
+      id: "toggle-fields",
+      name: "Toggle field names",
+      keywords: ["technical", "label", "badge", "field name", "alt shift f"],
+      group: "Tools",
+      hint: "Alt+Shift+F",
+      run: () => broadcastFrameCommand("TOGGLE_FIELD_NAMES"),
+    },
+    {
+      id: "toggle-translations",
+      name: "Toggle translation icons",
+      keywords: ["globe", "i18n", "l10n", "translate", "sys_documentation", "sys_translated_text"],
+      group: "Tools",
+      run: () => broadcastFrameCommand("TOGGLE_TRANSLATIONS"),
+    },
+    {
+      id: "copy-sysid",
+      name: "Copy sys_id",
+      keywords: ["copy", "sys_id", "record", "id", "guid"],
+      group: "Record",
+      keepOpen: true,
+      run: async () => {
+        const localId = sysIdFromText(location.href);
+        const resp = localId ? null : await chrome.runtime.sendMessage({ type: "GET_SYS_ID" });
+        const id = localId || (resp && resp.sysId);
+        if (id) {
+          try {
+            await copyText(id);
+            showToast("Copied " + id);
+          } catch (e) {
+            showCopyFallback(id);
+          }
+        } else {
+          showToast("No record sys_id found", true);
+        }
+      },
+    },
+    {
+      id: "open-table-list",
+      name: "Open table list…",
+      keywords: ["navigate", "jump", "list", "table", "open"],
+      group: "Navigate",
+      input: true,
+      placeholder: "table name (e.g. incident)",
+      run: (arg) => {
+        if (!arg) return;
+        navTo("/" + arg.trim() + "_list.do");
+      },
+    },
+    {
+      id: "open-table-new",
+      name: "Open new record…",
+      keywords: ["new", "create", "insert", "table"],
+      group: "Navigate",
+      input: true,
+      placeholder: "table name (e.g. incident)",
+      run: (arg) => {
+        if (!arg) return;
+        navTo("/" + arg.trim() + ".do?sys_id=-1");
+      },
+    },
+    ...DEV_LINKS.map(([label, path]) => ({
+      id: "devlink-" + path,
+      name: label,
+      keywords: [label.toLowerCase(), "dev", "link"],
+      group: "Dev Links",
+      run: () => navTo(path),
+    })),
+  ];
+  return cmds;
+}
+
+/* ---- Palette state ---- */
+let paletteHost = null;
+let paletteShadow = null;
+let paletteInput = null;
+let paletteList = null;
+let paletteToast = null;
+let activeIndex = 0;
+let filteredCmds = [];
+let activeInputCmd = null; // command waiting for a text argument
+
+const PALETTE_CSS = `
+  *{box-sizing:border-box;margin:0;padding:0}
+  :host{all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  #overlay{
+    position:fixed;inset:0;z-index:2147483647;
+    background:rgba(0,0,0,.45);display:flex;
+    align-items:flex-start;justify-content:center;padding-top:12vh;
+  }
+  #box{
+    background:#1e1e2e;border:1px solid #3a3a5c;border-radius:10px;
+    width:520px;max-width:calc(100vw - 32px);
+    box-shadow:0 24px 64px rgba(0,0,0,.6);overflow:hidden;
+  }
+  #search-wrap{
+    display:flex;align-items:center;padding:12px 14px;
+    border-bottom:1px solid #2e2e4e;gap:8px;
+  }
+  #search-icon{color:#666;flex-shrink:0;font-size:15px}
+  #search{
+    flex:1;background:transparent;border:none;outline:none;
+    color:#e0e0f0;font-size:14px;caret-color:#7c7cf8;
+  }
+  #search::placeholder{color:#555}
+  #kbd-hint{color:#555;font-size:11px;white-space:nowrap}
+  #results{max-height:360px;overflow-y:auto;padding:6px 0}
+  .group-label{
+    color:#555;font-size:10px;font-weight:700;letter-spacing:.08em;
+    text-transform:uppercase;padding:10px 16px 4px;
+  }
+  .cmd{
+    display:flex;align-items:center;padding:9px 16px;cursor:pointer;
+    gap:10px;color:#c0c0d8;font-size:13px;border-radius:0;
+    transition:background .08s;
+  }
+  .cmd.active{background:#2d2d50;color:#fff}
+  .cmd:hover{background:#272740}
+  .cmd-name{flex:1}
+  .cmd-hint{color:#555;font-size:11px;font-family:monospace}
+  .cmd-input-row{
+    display:flex;align-items:center;padding:10px 16px;
+    border-top:1px solid #2e2e4e;gap:8px;
+  }
+  .cmd-input-label{color:#7c7cf8;font-size:12px;white-space:nowrap}
+  #arg-input{
+    flex:1;background:transparent;border:none;outline:none;
+    color:#e0e0f0;font-size:13px;
+  }
+  #arg-input::placeholder{color:#555}
+  #toast{
+    display:none;padding:8px 16px;font-size:12px;
+    border-top:1px solid #2e2e4e;color:#a0e0b0;
+  }
+  #toast.err{color:#ff8b8b}
+  #empty{padding:20px 16px;color:#555;font-size:13px;text-align:center}
+`;
+
+function showToast(msg, isErr) {
+  if (!paletteToast) return;
+  paletteToast.textContent = msg;
+  paletteToast.className = isErr ? "err" : "";
+  paletteToast.style.display = "block";
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => {
+    if (paletteToast) paletteToast.style.display = "none";
+  }, 2200);
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) throw e;
+    return true;
+  }
+}
+
+function showCopyFallback(text) {
+  if (!paletteToast) return;
+  paletteToast.innerHTML = "";
+  const label = document.createElement("span");
+  label.textContent = "Copy blocked. sys_id: ";
+  const code = document.createElement("input");
+  code.value = text;
+  code.readOnly = true;
+  code.style.cssText =
+    "width:100%;margin-top:6px;background:#151522;border:1px solid #3a3a5c;" +
+    "color:#e0e0f0;border-radius:4px;padding:5px;font:12px monospace;";
+  paletteToast.appendChild(label);
+  paletteToast.appendChild(code);
+  paletteToast.className = "err";
+  paletteToast.style.display = "block";
+  code.focus();
+  code.select();
+}
+
+function renderResults(query) {
+  if (!paletteList) return;
+  const cmds = buildCommands();
+  const q = query.trim().toLowerCase();
+  filteredCmds = q
+    ? cmds.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.keywords || []).some((k) => k.includes(q))
+      )
+    : cmds;
+
+  paletteList.innerHTML = "";
+
+  if (!filteredCmds.length) {
+    paletteList.innerHTML = '<div id="empty">No commands match</div>';
+    activeIndex = 0;
+    return;
+  }
+
+  let lastGroup = null;
+  filteredCmds.forEach((cmd, i) => {
+    if (cmd.group && cmd.group !== lastGroup) {
+      const gl = document.createElement("div");
+      gl.className = "group-label";
+      gl.textContent = cmd.group;
+      paletteList.appendChild(gl);
+      lastGroup = cmd.group;
+    }
+    const el = document.createElement("div");
+    el.className = "cmd" + (i === activeIndex ? " active" : "");
+    el.dataset.idx = i;
+    el.innerHTML =
+      `<span class="cmd-name">${cmd.name}</span>` +
+      (cmd.hint ? `<span class="cmd-hint">${cmd.hint}</span>` : "");
+    el.addEventListener("mouseenter", () => {
+      activeIndex = i;
+      highlightActive();
+    });
+    el.addEventListener("click", () => selectCommand(filteredCmds[i]));
+    paletteList.appendChild(el);
+  });
+
+  activeIndex = Math.min(activeIndex, filteredCmds.length - 1);
+  highlightActive();
+}
+
+function highlightActive() {
+  if (!paletteList) return;
+  paletteList.querySelectorAll(".cmd").forEach((el) => {
+    el.classList.toggle("active", Number(el.dataset.idx) === activeIndex);
+  });
+  const active = paletteList.querySelector(".cmd.active");
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+function selectCommand(cmd) {
+  if (!cmd) return;
+  if (cmd.input) {
+    showArgInput(cmd);
+    return;
+  }
+  Promise.resolve(cmd.run()).catch((error) => {
+    showToast(String(error && error.message ? error.message : error), true);
+  });
+  if (!cmd.keepOpen) closePalette();
+}
+
+function showArgInput(cmd) {
+  if (!paletteShadow || !paletteList || !paletteInput) return;
+
+  activeInputCmd = cmd;
+  const shadow = paletteShadow;
+  // Hide results, show arg input row
+  paletteList.style.display = "none";
+  let row = shadow.getElementById("arg-row");
+  const box = shadow.getElementById("box");
+  const toast = shadow.getElementById("toast");
+  if (!box || !toast) return;
+
+  if (!row) {
+    row = document.createElement("div");
+    row.id = "arg-row";
+    row.className = "cmd-input-row";
+    row.innerHTML =
+      `<span class="cmd-input-label">${cmd.name.replace("…", "")}:</span>` +
+      `<input id="arg-input" placeholder="${cmd.placeholder || ""}" autocomplete="off" spellcheck="false" />`;
+    box.insertBefore(row, toast);
+  }
+  const argInput = shadow.getElementById("arg-input");
+  if (!argInput) return;
+
+  argInput.value = "";
+  argInput.focus();
+  argInput.onkeydown = (e) => {
+    if (e.key === "Enter") {
+      if (activeInputCmd) activeInputCmd.run(argInput.value.trim());
+      closePalette();
+    }
+    if (e.key === "Escape") {
+      activeInputCmd = null;
+      if (row.isConnected) row.remove();
+      if (paletteList) paletteList.style.display = "";
+      if (paletteInput) paletteInput.focus();
+    }
+    e.stopPropagation();
+  };
+}
+
+function openPalette() {
+  if (paletteHost) {
+    paletteInput && paletteInput.focus();
+    return;
+  }
+
+  paletteHost = document.createElement("div");
+  paletteHost.id = "snh-palette-host";
+  document.body.appendChild(paletteHost);
+  paletteShadow = paletteHost.attachShadow({ mode: "closed" });
+
+  paletteShadow.innerHTML = `
+    <style>${PALETTE_CSS}</style>
+    <div id="overlay">
+      <div id="box">
+        <div id="search-wrap">
+          <span id="search-icon">⌘</span>
+          <input id="search" placeholder="Search commands…" autocomplete="off" spellcheck="false" />
+          <span id="kbd-hint">ESC to close</span>
+        </div>
+        <div id="results"></div>
+        <div id="toast"></div>
+      </div>
+    </div>
+  `;
+
+  paletteInput = paletteShadow.getElementById("search");
+  paletteList  = paletteShadow.getElementById("results");
+  paletteToast = paletteShadow.getElementById("toast");
+
+  activeIndex = 0;
+  activeInputCmd = null;
+  renderResults("");
+  paletteInput.focus();
+
+  paletteInput.addEventListener("input", () => {
+    activeIndex = 0;
+    renderResults(paletteInput.value);
+  });
+
+  paletteInput.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeIndex = Math.min(activeIndex + 1, filteredCmds.length - 1);
+      highlightActive();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, 0);
+      highlightActive();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      selectCommand(filteredCmds[activeIndex]);
+    } else if (e.key === "Escape") {
+      closePalette();
+    }
+  });
+
+  const overlay = paletteShadow.getElementById("overlay");
+  if (overlay) overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closePalette();
+  });
+}
+
+function closePalette() {
+  if (paletteHost) {
+    paletteHost.remove();
+    paletteHost = null;
+    paletteShadow = null;
+    paletteInput = null;
+    paletteList = null;
+    paletteToast = null;
+    activeInputCmd = null;
+  }
+}
+
+// Ctrl+\ listener — attached in EVERY frame, because in the classic UI the
+// keypress usually lands inside the gsft_main iframe, not the top frame.
+// The top frame owns the single palette; sub-frames route the trigger up
+// through the background worker. (Ctrl+/ collides with snUtils; Alt+Space
+// with the ChatGPT desktop app.)
+const handledPaletteKeyEvents = new WeakSet();
+
+function handlePaletteShortcut(e) {
+  if (handledPaletteKeyEvents.has(e)) return;
+  const isBackslash =
+    e.key === "\\" || e.code === "Backslash" || e.code === "IntlBackslash";
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && isBackslash) {
+    handledPaletteKeyEvents.add(e);
+    e.preventDefault();
+    e.stopPropagation();
+    if (window === window.top) {
+      togglePalette();
+    } else {
+      chrome.runtime.sendMessage({ type: "TOGGLE_PALETTE" });
+    }
+  }
+}
+
+window.addEventListener("keydown", handlePaletteShortcut, true);
+document.addEventListener("keydown", handlePaletteShortcut, true);
