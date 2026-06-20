@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "SN Dev Helper",
+  "version": "0.3.0",
+  "description": "Developer utilities for ServiceNow: instance info, quick table nav, dev shortcuts, copy sys_id, technical field names.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://*.service-now.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SN Dev Helper"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.service-now.com/*"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "commands": {
+    "toggle-field-names": {
+      "suggested_key": { "default": "Alt+Shift+F" },
+      "description": "Toggle technical field names on the current form"
+    }
+  }
+}
