@@ -556,3 +556,13 @@ function closePalette() {
     activeInputCmd = null;
   }
 }
+
+// Ctrl+/ listener — top frame only to avoid duplicate palettes from sub-frames.
+if (window === window.top) {
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === "/") {
+      e.preventDefault();
+      paletteHost ? closePalette() : openPalette();
+    }
+  });
+}
