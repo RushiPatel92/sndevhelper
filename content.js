@@ -557,11 +557,11 @@ function closePalette() {
   }
 }
 
-// Ctrl+\ listener — top frame only to avoid duplicate palettes from sub-frames.
-// (Ctrl+/ is avoided because snUtils already uses it.)
+// Alt+Space listener — top frame only to avoid duplicate palettes from
+// sub-frames. (Ctrl+/ is avoided because snUtils already uses it.)
 if (window === window.top) {
   document.addEventListener("keydown", (e) => {
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === "\\") {
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && e.code === "Space") {
       e.preventDefault();
       paletteHost ? closePalette() : openPalette();
     }
