@@ -125,12 +125,12 @@ async function fillPortalVariables(variables) {
     total: Array.isArray(variables) ? variables.length : 0,
   };
   const values = Array.isArray(variables) ? variables : [];
-  const simpleFillDelayMs = 75;
-  const choiceFillDelayMs = 300;
-  const referenceFillDelayMs = 900;
-  const triggerReferenceDelayMs = 2500;
-  const retryDelayMs = 500;
-  const maxFillPasses = 3;
+  const simpleFillDelayMs = 25;
+  const choiceFillDelayMs = 150;
+  const referenceFillDelayMs = 400;
+  const triggerReferenceDelayMs = 1000;
+  const retryDelayMs = 250;
+  const maxFillPasses = 2;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -150,7 +150,6 @@ async function fillPortalVariables(variables) {
     "17",
     "19",
     "20",
-    "21",
     "24",
     "25",
     "31",
@@ -161,7 +160,6 @@ async function fillPortalVariables(variables) {
     "container_start",
     "encrypted",
     "label",
-    "list_collector",
     "macro",
     "multi_row",
     "multi_row_variable_set",
@@ -393,6 +391,11 @@ async function fillPortalVariables(variables) {
     return Boolean(a && b && a === b);
   };
 
+  const isSameFilledValue = (current, value, displayValue) => {
+    if (isEmpty(current)) return false;
+    return sameValue(current, value) || sameValue(current, displayValue);
+  };
+
   const choiceLabel = (choice) =>
     choice && (choice.display_value || choice.label || choice.text || choice.displayValue || choice.name || "");
 
@@ -403,10 +406,75 @@ async function fillPortalVariables(variables) {
       choices.find((choice) => sameValue(choiceLabel(choice), value));
   };
 
+  const choiceValueAliases = {
+    supplier_type: {
+      standard: "customers_to_be_created_as_vendors",
+    },
+  };
+
+  const aliasedChoiceValue = (variable, value) => {
+    const aliases = choiceValueAliases[String((variable && variable.name) || "").trim()];
+    if (!aliases) return "";
+    return aliases[normalizeComparable(value)] || "";
+  };
+
   const isReferenceVariable = (variable) => {
     const type = String((variable && variable.type) || "").trim().toLowerCase();
     return type === "8" || type === "reference";
   };
+
+  const isGlideListVariable = (variable) => {
+    const type = String((variable && variable.type) || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    return type === "21" || type === "glide_list" || type === "glide-list" || type === "list_collector";
+  };
+
+  const isGlideListField = (field) => {
+    const type = String((field && (field.type || field.display_type || field.fieldType)) || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    return type === "glide_list" || type === "glide-list";
+  };
+
+  const select2ContainerForElement = (el) => {
+    if (!el) return null;
+    try {
+      if (el.id) {
+        const byId = document.getElementById("s2id_" + el.id);
+        if (byId) return byId;
+      }
+    } catch (e) {}
+    try {
+      return (el.closest && el.closest(".select2-container")) || null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const isSelect2MultiElement = (el) => {
+    const container = select2ContainerForElement(el);
+    return Boolean(container && container.classList && container.classList.contains("select2-container-multi"));
+  };
+
+  const select2InputForElement = (el) => {
+    const container = select2ContainerForElement(el);
+    if (!container || !container.querySelector) return el;
+    return container.querySelector("input.select2-input") || el;
+  };
+
+  const isCheckboxVariable = (variable) => {
+    const type = String((variable && variable.type) || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    return type === "7" || type === "boolean" || type === "checkbox" || type === "checkbox_container";
+  };
+
+  const isDomFirstVariable = (variable) =>
+    isCheckboxVariable(variable) || isGlideListVariable(variable);
 
   const isChoiceLikeVariable = (variable) => {
     const type = String((variable && variable.type) || "").trim().toLowerCase();
@@ -422,7 +490,7 @@ async function fillPortalVariables(variables) {
     const scopes = [];
     const addScope = (scope) => {
       if (!scope || scopes.indexOf(scope) >= 0) return;
-      if (scope.field && scope.field.name && variable.name && scope.field.name !== variable.name) return;
+      if (scope.field && !fieldMatchesVariable(scope.field, variable)) return;
       scopes.push(scope);
     };
 
@@ -437,6 +505,21 @@ async function fillPortalVariables(variables) {
     return scopes;
   };
 
+  const splitListValue = (value) =>
+    String(value == null ? "" : value)
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  const select2ListItems = (value, displayValue) => {
+    const values = splitListValue(value);
+    const displays = splitListValue(displayValue);
+    return values.map((id, index) => ({
+      id,
+      text: displays[index] || id,
+    }));
+  };
+
   const updateSelect2Display = (el, value, displayValue) => {
     const label = displayValue || value;
     if (!label) return;
@@ -445,29 +528,104 @@ async function fillPortalVariables(variables) {
     if (el.id) {
       candidates.push(document.getElementById("s2id_" + el.id));
     }
-    let node = el;
-    for (let i = 0; node && i < 4; i++, node = node.parentElement) {
-      try {
-        node.querySelectorAll &&
-          node.querySelectorAll(".select2-container").forEach((candidate) => candidates.push(candidate));
-      } catch (e) {}
-      if (node.previousElementSibling) candidates.push(node.previousElementSibling);
-      if (node.nextElementSibling) candidates.push(node.nextElementSibling);
-    }
+    try {
+      const closest = el.closest && el.closest(".select2-container");
+      if (closest) candidates.push(closest);
+    } catch (e) {}
+    try {
+      if (
+        el.previousElementSibling &&
+        el.previousElementSibling.classList &&
+        el.previousElementSibling.classList.contains("select2-container")
+      ) {
+        candidates.push(el.previousElementSibling);
+      }
+      if (
+        el.nextElementSibling &&
+        el.nextElementSibling.classList &&
+        el.nextElementSibling.classList.contains("select2-container")
+      ) {
+        candidates.push(el.nextElementSibling);
+      }
+    } catch (e) {}
+    try {
+      if (el.parentElement) {
+        Array.from(el.parentElement.children || []).forEach((child) => {
+          if (child.classList && child.classList.contains("select2-container")) {
+            candidates.push(child);
+          }
+        });
+      }
+    } catch (e) {}
 
+    const uniqueCandidates = [];
     candidates.filter(Boolean).forEach((container) => {
+      if (uniqueCandidates.indexOf(container) < 0) uniqueCandidates.push(container);
+    });
+
+    const belongsToField = (container) => {
+      if (!container) return false;
+      if (el.id && container.id === "s2id_" + el.id) return true;
       try {
+        if (container.contains && container.contains(el)) return true;
+      } catch (e) {}
+      try {
+        const parent = el.parentElement;
+        if (parent && container.parentElement === parent) return true;
+      } catch (e) {}
+      return false;
+    };
+
+    for (const container of uniqueCandidates) {
+      if (!belongsToField(container)) continue;
+      try {
+        const choices = container.querySelector && container.querySelector(".select2-choices");
+        if (choices) {
+          const inputItem = choices.querySelector(".select2-search-field");
+          Array.from(choices.querySelectorAll(".select2-search-choice")).forEach((choice) => choice.remove());
+          select2ListItems(value, displayValue).forEach((item) => {
+            const choice = document.createElement("li");
+            choice.className = "select2-search-choice";
+            const div = document.createElement("div");
+            div.textContent = item.text;
+            choice.appendChild(div);
+            choices.insertBefore(choice, inputItem || null);
+          });
+        }
         const chosen = container.querySelector && container.querySelector(".select2-chosen");
         if (chosen) chosen.textContent = label;
         container.classList && container.classList.remove("select2-default");
         container.classList && container.classList.remove("select2-dropdown-open");
         container.setAttribute && container.setAttribute("aria-expanded", "false");
       } catch (e) {}
-    });
+    }
     try {
       document.querySelectorAll(".select2-drop-active,.select2-drop,.select2-drop-mask").forEach((drop) => {
         drop.style.display = "none";
       });
+    } catch (e) {}
+  };
+
+  const closeSelect2Dropdown = (el) => {
+    const container = select2ContainerForElement(el);
+    try {
+      if (container && container.classList) {
+        container.classList.remove("select2-dropdown-open");
+        container.classList.remove("select2-container-active");
+        container.setAttribute("aria-expanded", "false");
+      }
+    } catch (e) {}
+    try {
+      if (el && typeof el.blur === "function") el.blur();
+    } catch (e) {}
+    try {
+      document.querySelectorAll(".select2-drop-active,.select2-drop,.select2-drop-mask").forEach((drop) => {
+        drop.classList && drop.classList.remove("select2-drop-active");
+        drop.style.display = "none";
+      });
+    } catch (e) {}
+    try {
+      document.body && document.body.click && document.body.click();
     } catch (e) {}
   };
 
@@ -555,7 +713,7 @@ async function fillPortalVariables(variables) {
     });
   };
 
-  const findReferenceSuggestion = (value, displayValue) => {
+  const findReferenceSuggestion = (el, value, displayValue) => {
     const selectors = [
       "[role='option']",
       ".select2-result-selectable",
@@ -568,13 +726,27 @@ async function fillPortalVariables(variables) {
       "li",
     ];
     const candidates = [];
-    selectors.forEach((selector) => {
-      try {
-        document.querySelectorAll(selector).forEach((option) => {
-          if (option.offsetParent !== null && candidates.indexOf(option) < 0) candidates.push(option);
-        });
-      } catch (e) {}
-    });
+    const addCandidates = (root) => {
+      if (!root || !root.querySelectorAll) return;
+      selectors.forEach((selector) => {
+        try {
+          root.querySelectorAll(selector).forEach((option) => {
+            if (option.offsetParent !== null && candidates.indexOf(option) < 0) candidates.push(option);
+          });
+        } catch (e) {}
+      });
+    };
+
+    try {
+      const owns = el && el.getAttribute && el.getAttribute("aria-owns");
+      if (owns) addCandidates(document.getElementById(owns));
+    } catch (e) {}
+    try {
+      document.querySelectorAll(".select2-drop-active,.select2-drop").forEach((drop) => {
+        if (drop.offsetParent !== null) addCandidates(drop);
+      });
+    } catch (e) {}
+    if (!candidates.length) addCandidates(document);
 
     return candidates.find((option) => sameValue(visibleText(option), displayValue)) ||
       candidates.find((option) => sameValue(visibleText(option), value)) ||
@@ -587,28 +759,109 @@ async function fillPortalVariables(variables) {
       (/^[0-9a-f]{32}$/i.test(String(value || "")) && sameValue(value, displayValue) ? candidates[0] : null);
   };
 
+  const findChoiceSuggestion = (el, value, displayValue, allowFallback) => {
+    const options = [];
+    const addOptions = (root) => {
+      if (!root || !root.querySelectorAll) return;
+      [
+        "[role='option']",
+        ".select2-result-selectable",
+        ".select2-result",
+        "ul[role='listbox'] li",
+        "li",
+      ].forEach((selector) => {
+        try {
+          root.querySelectorAll(selector).forEach((option) => {
+            if (option.offsetParent !== null && options.indexOf(option) < 0) options.push(option);
+          });
+        } catch (e) {}
+      });
+    };
+
+    try {
+      const owns = el && el.getAttribute && el.getAttribute("aria-owns");
+      if (owns) addOptions(document.getElementById(owns));
+    } catch (e) {}
+    try {
+      document.querySelectorAll(".select2-drop-active,.select2-drop").forEach(addOptions);
+    } catch (e) {}
+
+    const isNone = (option) => /^--\s*none\s*--$/i.test(visibleText(option));
+    const textMatches = (option, target) => {
+      const text = normalizeComparable(visibleText(option));
+      const normalized = normalizeComparable(target);
+      return Boolean(text && normalized && (text === normalized || text.indexOf(normalized) >= 0));
+    };
+
+    return options.find((option) => !isNone(option) && textMatches(option, displayValue)) ||
+      options.find((option) => !isNone(option) && textMatches(option, value)) ||
+      (allowFallback ? options.find((option) => !isNone(option)) : null);
+  };
+
+  const commitChoiceSuggestion = async (el, value, displayValue, allowFallback) => {
+    const container = select2ContainerForElement(el);
+    if (!container) return false;
+    try {
+      container.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      container.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      container.click();
+    } catch (e) {}
+    await sleep(125);
+    const option = findChoiceSuggestion(el, value, displayValue, allowFallback);
+    if (!clickOption(option)) {
+      closeSelect2Dropdown(el);
+      return false;
+    }
+    const selectedText = visibleText(option);
+    await sleep(125);
+    closeSelect2Dropdown(el);
+    return selectedText || true;
+  };
+
   const commitReferenceSuggestion = async (el, value, displayValue) => {
     if (!displayValue && !value) return false;
 
+    closeSelect2Dropdown(el);
+    const container = select2ContainerForElement(el);
+    try {
+      if (container) {
+        container.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        container.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        container.click();
+        await sleep(125);
+      }
+    } catch (e) {}
+
     const query = displayValue || value;
-    if (el && "value" in el) {
-      el.value = query;
+    let input = el;
+    try {
+      input =
+        document.querySelector(".select2-drop-active input.select2-input") ||
+        document.querySelector(".select2-drop input.select2-input") ||
+        select2InputForElement(el) ||
+        el;
+    } catch (e) {}
+
+    if (input && "value" in input) {
+      input.value = query;
       ["focus", "input", "keyup"].forEach((eventName) => {
         try {
-          el.dispatchEvent(new Event(eventName, { bubbles: true }));
+          input.dispatchEvent(new Event(eventName, { bubbles: true }));
         } catch (e) {}
       });
-      dispatchKeyboardCommit(el);
+      dispatchKeyboardCommit(input);
     }
 
     for (let i = 0; i < 8; i++) {
       await sleep(125);
-      const option = findReferenceSuggestion(value, displayValue);
+      const option = findReferenceSuggestion(input || el, value, displayValue);
       if (clickOption(option)) {
         await sleep(125);
+        closeSelect2Dropdown(el);
         return true;
       }
     }
+    closeSelect2Dropdown(el);
     return false;
   };
 
@@ -663,6 +916,98 @@ async function fillPortalVariables(variables) {
     return keys;
   };
 
+  const fieldMatchesVariable = (field, variable) => {
+    if (!field || !variable) return false;
+    const keys = variableKeys(variable);
+    const names = [
+      field.name,
+      field.variable_name,
+      field.fieldName,
+      field.id,
+      field.sys_id,
+      field.question_id,
+      field.questionId,
+    ].filter(Boolean);
+    if (names.some((name) => keys.indexOf(String(name)) >= 0)) return true;
+    if (variable.label) {
+      const labels = [
+        field.label,
+        field.question_text,
+        field.questionText,
+        field.display_label,
+      ].filter(Boolean);
+      if (labels.some((label) => sameValue(label, variable.label))) return true;
+    }
+    return false;
+  };
+
+  const findAngularFieldModels = (variable) => {
+    const angular = getAngular();
+    if (!angular || !angular.element) return [];
+    const models = [];
+    const seen = [];
+    const addModel = (field) => {
+      if (!field || typeof field !== "object" || models.indexOf(field) >= 0) return;
+      if (fieldMatchesVariable(field, variable)) models.push(field);
+    };
+    const scan = (obj, depth) => {
+      if (!obj || typeof obj !== "object" || depth > 4 || seen.indexOf(obj) >= 0) return;
+      seen.push(obj);
+      addModel(obj);
+      let keys = [];
+      try {
+        keys = Object.keys(obj).slice(0, 80);
+      } catch (e) {}
+      keys.forEach((key) => {
+        if (/password|token|secret|cookie|session/i.test(key)) return;
+        try {
+          const value = obj[key];
+          if (value && typeof value === "object") scan(value, depth + 1);
+        } catch (e) {}
+      });
+    };
+
+    [
+      "#sc_cat_item",
+      "#sc_cat_item sp-variable-layout",
+      "sp-variable-layout#sc_cat_item\\.do",
+      "sp-variable-layout",
+      "sp-cat-item",
+      "sp-sc-cat-item",
+      ".sc-form",
+      ".catalog-form",
+      "[sp-model]",
+      "[ng-controller]",
+      "body",
+    ].forEach((selector) => {
+      try {
+        document.querySelectorAll(selector).forEach((el) => {
+          const wrapped = angular.element(el);
+          if (wrapped.scope) scan(wrapped.scope(), 0);
+          if (wrapped.isolateScope) scan(wrapped.isolateScope(), 0);
+        });
+      } catch (e) {}
+    });
+    return models;
+  };
+
+  const applyValueToField = (field, value, displayValue, isGlideList) => {
+    if (!field) return;
+    field.value = value;
+    field.stagedValue = value;
+    field.display_value = displayValue;
+    field.displayValue = displayValue;
+    if (isGlideList) {
+      field.display_value_list = splitListValue(displayValue);
+      field.value_list = splitListValue(value);
+    } else {
+      field.display_value_list = displayValue;
+      field.value_list = value;
+    }
+    field.selectedValue = value;
+    field.selectedDisplayValue = displayValue;
+  };
+
   const invokeGFormChangeHandlers = (gForm, key, variable, oldValue) => {
     if (!gForm || !key) return;
     const newValue = variable && variable.value != null ? String(variable.value) : "";
@@ -709,6 +1054,14 @@ async function fillPortalVariables(variables) {
       variable.displayValue == null ? value : String(variable.displayValue);
     let fieldScopes = findAngularFieldScopes(el, variable);
     const isReference = isReferenceVariable(variable);
+    const isChoice = isChoiceLikeVariable(variable);
+    const isGlideList =
+      isGlideListVariable(variable) ||
+      fieldScopes.some((candidate) => candidate && isGlideListField(candidate.field)) ||
+      isSelect2MultiElement(el);
+
+    const aliasValue = isChoice ? aliasedChoiceValue(variable, value) : "";
+    if (aliasValue) value = aliasValue;
 
     fieldScopes.forEach((candidate) => {
       if (!candidate.field) return;
@@ -720,7 +1073,14 @@ async function fillPortalVariables(variables) {
     });
 
     if (el.type === "checkbox") {
-      el.checked = ["true", "1", "yes", "y", "on"].includes(value.toLowerCase());
+      const checked = ["true", "1", "yes", "y", "on"].includes(value.toLowerCase());
+      if (el.checked !== checked) {
+        try {
+          el.click();
+        } catch (e) {}
+      }
+      el.checked = checked;
+      el.value = checked ? "true" : "false";
     } else if (el.type === "radio") {
       const option = findRadioOption(el, value, displayValue);
       if (!selectRadioOption(option)) return false;
@@ -734,8 +1094,10 @@ async function fillPortalVariables(variables) {
       el.textContent = value;
     } else if (el.tagName && el.tagName.toLowerCase() === "select") {
       const options = Array.from(el.options || []);
-      const match = options.find((option) => option.value === value) ||
-        options.find((option) => option.text === displayValue || option.text === value);
+      const match = options.find((option) => sameValue(option.value, value)) ||
+        options.find((option) => sameValue(option.text, displayValue) || sameValue(option.text, value)) ||
+        (aliasValue ? options.find((option) => sameValue(option.value, aliasValue)) : null) ||
+        (aliasValue ? options.find((option) => normalizeComparable(option.text).indexOf(normalizeComparable(aliasValue)) >= 0) : null);
       if (match) {
         el.value = match.value;
         value = match.value;
@@ -743,14 +1105,14 @@ async function fillPortalVariables(variables) {
       } else {
         el.value = value;
       }
-    } else if (isReference && el.classList && el.classList.contains("select2-focusser")) {
+    } else if ((isReference || isGlideList) && el.classList && el.classList.contains("select2-focusser")) {
       el.value = "";
-    } else if (isReference && el.classList && el.classList.contains("select2-input")) {
+    } else if ((isReference || isGlideList) && el.classList && el.classList.contains("select2-input")) {
       el.value = "";
-    } else if (isReference && el.classList && el.classList.contains("select2-offscreen")) {
+    } else if ((isReference || isGlideList) && el.classList && el.classList.contains("select2-offscreen")) {
       el.value = value;
     } else {
-      el.value = isReference ? displayValue : value;
+      el.value = isReference && !isGlideList ? displayValue : value;
     }
 
     try {
@@ -761,17 +1123,14 @@ async function fillPortalVariables(variables) {
         const isolateScope = wrapped.isolateScope && wrapped.isolateScope();
         fieldScopes.concat([scope, isolateScope]).forEach((candidate) => {
           if (!candidate || !candidate.field) return;
-          if (candidate.field.name && variable.name && candidate.field.name !== variable.name) {
+          if (!fieldMatchesVariable(candidate.field, variable)) {
             return;
           }
-          candidate.field.value = value;
-          candidate.field.stagedValue = value;
-          candidate.field.display_value = displayValue;
-          candidate.field.displayValue = displayValue;
-          candidate.field.display_value_list = displayValue;
-          candidate.field.value_list = value;
-          candidate.field.selectedValue = value;
-          candidate.field.selectedDisplayValue = displayValue;
+          applyValueToField(candidate.field, value, displayValue, isGlideList);
+        });
+
+        findAngularFieldModels(variable).forEach((field) => {
+          applyValueToField(field, value, displayValue, isGlideList || isGlideListField(field));
         });
 
         if (scope && Object.prototype.hasOwnProperty.call(scope, "fieldValue")) {
@@ -795,8 +1154,15 @@ async function fillPortalVariables(variables) {
 
     updateSelect2Display(el, value, displayValue);
 
-    if (isReference && !(el.classList && el.classList.contains("select2-offscreen"))) {
-      await commitReferenceSuggestion(el, value, displayValue);
+    if (isChoice && select2ContainerForElement(el)) {
+      const selectedChoiceText = await commitChoiceSuggestion(el, value, displayValue, Boolean(aliasValue));
+      if (typeof selectedChoiceText === "string" && selectedChoiceText) displayValue = selectedChoiceText;
+      updateSelect2Display(el, value, displayValue);
+    }
+
+    if (isReference && !isGlideList) {
+      await commitReferenceSuggestion(select2InputForElement(el), value, displayValue);
+      updateSelect2Display(el, value, displayValue);
     }
     invokeAngularChangeHandlers(el, variable, value, displayValue);
 
@@ -804,7 +1170,16 @@ async function fillPortalVariables(variables) {
       const jq = window.jQuery || window.$;
       if (jq) {
         const wrapped = jq(el);
-        if (isReference && wrapped.data && wrapped.data("select2")) {
+        if (isGlideList) {
+          if (wrapped.data && wrapped.data("select2")) {
+            try {
+              wrapped.select2("data", select2ListItems(value, displayValue));
+            } catch (e) {}
+          }
+          wrapped.val(value);
+          wrapped.trigger("change");
+          wrapped.trigger("blur");
+        } else if (isReference && wrapped.data && wrapped.data("select2")) {
           try {
             wrapped.select2("close");
           } catch (e) {}
@@ -819,12 +1194,14 @@ async function fillPortalVariables(variables) {
       }
     } catch (e) {}
 
-    const events = isReference ? ["blur"] : ["input", "change", "blur"];
+    const events = isReference && !isGlideList ? ["blur"] : ["input", "change", "blur"];
     events.forEach((eventName) => {
       try {
         el.dispatchEvent(new Event(eventName, { bubbles: true }));
       } catch (e) {}
     });
+
+    if (select2ContainerForElement(el)) closeSelect2Dropdown(el);
 
     return true;
   };
@@ -832,6 +1209,23 @@ async function fillPortalVariables(variables) {
   const findDomField = (variable) => {
     const label = variable && variable.label;
     const keys = variableKeys(variable);
+    const attrMatchesVariable = (attr) => {
+      if (!attr) return false;
+      const variants = [attr];
+      if (attr.indexOf("s2id_") === 0) variants.push(attr.replace(/^s2id_/, ""));
+      variants.slice().forEach((variant) => {
+        if (variant.indexOf("sp_formfield_") === 0) {
+          variants.push(variant.replace(/^sp_formfield_/, ""));
+        }
+      });
+      return variants.some((variant) => keys.indexOf(variant) >= 0 || (label && sameValue(variant, label)));
+    };
+    const labelMatchesText = (el) => {
+      if (!label || !el) return false;
+      const expected = normalizeComparable(label);
+      const actual = normalizeComparable(visibleText(el));
+      return Boolean(expected && actual && (actual === expected || actual.indexOf(expected) >= 0));
+    };
     const candidates = Array.from(
       document.querySelectorAll("input,textarea,select,[contenteditable='true']")
     ).filter((el) => el.type !== "hidden");
@@ -846,16 +1240,24 @@ async function fillPortalVariables(variables) {
         el.getAttribute("data-field-name"),
         el.getAttribute("aria-label"),
       ].filter(Boolean);
-      return attrs.some((attr) => keys.indexOf(attr) >= 0 || (label && attr === label));
+      return attrs.some(attrMatchesVariable) ||
+        labelMatchesText(el.closest("label"));
     });
 
     if (direct) return direct;
 
     const fieldContainers = Array.from(
       document.querySelectorAll(
-        "fieldset,[id^='sp_formfield_'],[data-variable-name],[data-field-name],[data-name]"
+        "fieldset,.form-group,.question,sp-variable,.select2-container,[id^='sp_formfield_'],[id^='s2id_sp_formfield_'],[data-variable-name],[data-field-name],[data-name]"
       )
     );
+    candidates.forEach((candidate) => {
+      let node = candidate.parentElement;
+      for (let i = 0; node && i < 5; i++, node = node.parentElement) {
+        if (fieldContainers.indexOf(node) < 0) fieldContainers.push(node);
+      }
+    });
+
     const matchesContainer = (el) => {
       const attrs = [
         el.getAttribute("id"),
@@ -867,16 +1269,27 @@ async function fillPortalVariables(variables) {
         el.getAttribute("aria-label"),
       ].filter(Boolean);
 
-      return attrs.some((attr) => {
-        const normalizedAttr = attr.replace(/^sp_formfield_/, "");
-        return keys.indexOf(attr) >= 0 ||
-          keys.indexOf(normalizedAttr) >= 0 ||
-          (label && sameValue(attr, label));
-      });
+      const matchedByAttr = attrs.some(attrMatchesVariable);
+      if (matchedByAttr) return true;
+      return labelMatchesText(el);
     };
 
     const container = fieldContainers.find(matchesContainer);
     if (!container) return null;
+    if (container.classList && container.classList.contains("select2-container")) {
+      const originalId = container.id && container.id.indexOf("s2id_") === 0
+        ? container.id.replace(/^s2id_/, "")
+        : "";
+      const original = originalId ? document.getElementById(originalId) : null;
+      if (original) return original;
+      return container.querySelector("input.select2-input,input:not([type='hidden']),textarea,select,[contenteditable='true']");
+    }
+    if (
+      container.matches &&
+      container.matches("input:not([type='hidden']),textarea,select,[contenteditable='true']")
+    ) {
+      return container;
+    }
     return container.querySelector("input:not([type='hidden']),textarea,select,[contenteditable='true']");
   };
 
@@ -884,9 +1297,25 @@ async function fillPortalVariables(variables) {
     const el = findDomField(variable);
     if (!el) return "missing";
     result.foundForm = true;
-    if (!isEmpty(getElementValue(el))) return "already";
+    const current = getElementValue(el);
+    const value = variable && variable.value != null ? String(variable.value) : "";
+    const displayValue = variable && variable.displayValue != null ? String(variable.displayValue) : value;
+    if (isSameFilledValue(current, value, displayValue)) {
+      if (isReferenceVariable(variable) && select2ContainerForElement(el)) {
+        if (!(await setElementValue(el, variable))) return "missing";
+        return "filled";
+      }
+      return "already";
+    }
     if (!(await setElementValue(el, variable))) return "missing";
     return "filled";
+  };
+
+  const isTargetGlideListVariable = (variable) => {
+    const el = findDomField(variable);
+    if (!el) return false;
+    return isSelect2MultiElement(el) ||
+      findAngularFieldScopes(el, variable).some((candidate) => candidate && isGlideListField(candidate.field));
   };
 
   const triggerDomChangeForVariable = async (variable) => {
@@ -899,7 +1328,7 @@ async function fillPortalVariables(variables) {
   const delayAfterVariableChange = async (variable) => {
     let delay = simpleFillDelayMs;
     if (isChoiceLikeVariable(variable)) delay = choiceFillDelayMs;
-    if (isReferenceVariable(variable)) delay = referenceFillDelayMs;
+    if (isReferenceVariable(variable) || isGlideListVariable(variable)) delay = referenceFillDelayMs;
     if (isKnownAsyncTriggerVariable(variable)) delay = triggerReferenceDelayMs;
     if (delay > 0) await sleep(delay);
   };
@@ -961,14 +1390,32 @@ async function fillPortalVariables(variables) {
           continue;
         }
 
+        const useDomFirst = isDomFirstVariable(variable) || isTargetGlideListVariable(variable);
+        if (useDomFirst) {
+          try {
+            const prefix = pass > 1 ? "Retrying" : "Filling";
+            emitProgress(prefix + " " + index + " of " + batch.length + ": " + (variable.label || variable.name));
+            const domResult = await fillDomVariable(variable);
+            if (domResult === "filled") {
+              result.filled++;
+              await delayAfterVariableChange(variable);
+              continue;
+            }
+            if (domResult === "already") {
+              result.alreadySet++;
+              continue;
+            }
+          } catch (e) {}
+        }
+
         let handled = false;
         for (const key of variableKeys(variable)) {
           try {
             const prefix = pass > 1 ? "Retrying" : "Filling";
             emitProgress(prefix + " " + index + " of " + batch.length + ": " + (variable.label || variable.name));
             const current = gForm.getValue(key);
-            if (!isEmpty(current)) {
-              if (isKnownAsyncTriggerVariable(variable)) {
+            if (isSameFilledValue(current, variable.value, variable.displayValue)) {
+              if (isKnownAsyncTriggerVariable(variable) || useDomFirst || isReferenceVariable(variable)) {
                 await triggerDomChangeForVariable(variable);
                 setGFormValue(gForm, key, variable);
                 invokeGFormChangeHandlers(gForm, key, variable, current);

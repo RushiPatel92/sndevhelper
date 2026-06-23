@@ -11,7 +11,13 @@
  * with world:"MAIN". Here we only touch the DOM.
  */
 
-const SNH = { fieldNamesOn: false, transIconsOn: false, lastPrefillVariables: [] };
+const SNH = {
+  fieldNamesOn: false,
+  transIconsOn: false,
+  lastPrefillVariables: [],
+  lastPrefillSource: null,
+  lastPrefillResult: null,
+};
 const SNH_FRAME_COMMAND_SOURCE = "SN_DEV_HELPER_FRAME_COMMAND";
 const SNH_PREFILL_PROGRESS_SOURCE = "SN_DEV_HELPER_PREFILL_PROGRESS";
 const WORKSPACE_FIELD_ATTRS = [
@@ -433,6 +439,15 @@ async function resolveVariableSource(input) {
 
   if (!task) {
     if (parsed.kind === "sys_id") {
+      const catalogItem = await resolveCatalogItemDefinition(parsed.value);
+      if (catalogItem) {
+        const itemName = catalogItem.name ? " (" + catalogItem.name + ")" : "";
+        throw new Error(
+          "That sys_id is the catalog item/record producer definition" +
+            itemName +
+            ". Paste a submitted ticket/record number or sys_id instead."
+        );
+      }
       return {
         mode: "producer",
         sysId: parsed.value,
@@ -484,6 +499,29 @@ async function resolveVariableSource(input) {
   return { mode: "producer", sysId, table, number, requestItemId: null };
 }
 
+async function resolveCatalogItemDefinition(sysId) {
+  const tables = ["sc_cat_item_producer", "sc_cat_item"];
+  for (const table of tables) {
+    try {
+      const rows = await snGetMany(
+        table,
+        "sys_id=" + sysId,
+        "sys_id,name,sys_class_name",
+        1,
+        { displayAll: true, excludeRefLinks: true }
+      );
+      if (rows.length) {
+        return {
+          table,
+          name: snFieldDisplay(rows[0], "name"),
+          className: snFieldValue(rows[0], "sys_class_name"),
+        };
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
 const UNSUPPORTED_VARIABLE_TYPES = new Set([
   "11",
   "14",
@@ -491,7 +529,6 @@ const UNSUPPORTED_VARIABLE_TYPES = new Set([
   "17",
   "19",
   "20",
-  "21",
   "24",
   "25",
   "31",
@@ -502,7 +539,6 @@ const UNSUPPORTED_VARIABLE_TYPES = new Set([
   "container_start",
   "encrypted",
   "label",
-  "list_collector",
   "macro",
   "multi_row",
   "multi_row_variable_set",
@@ -545,7 +581,8 @@ function normalizeSourceVariable(row, mapping) {
       questionId: mapping.questionId ? snFieldValue(row, mapping.questionId) : "",
       referenceTable:
         (mapping.referenceTable ? snFieldValue(row, mapping.referenceTable) : "") ||
-        (mapping.lookupTable ? snFieldValue(row, mapping.lookupTable) : ""),
+        (mapping.lookupTable ? snFieldValue(row, mapping.lookupTable) : "") ||
+        (mapping.listTable ? snFieldValue(row, mapping.listTable) : ""),
     },
     skipped: 0,
   };
@@ -578,6 +615,7 @@ async function fetchCatalogVariables(requestItemId) {
       "sc_item_option.item_option_new.order",
       "sc_item_option.item_option_new.reference",
       "sc_item_option.item_option_new.lookup_table",
+      "sc_item_option.item_option_new.list_table",
     ].join(","),
     300,
     { displayAll: true, excludeRefLinks: true }
@@ -592,13 +630,19 @@ async function fetchCatalogVariables(requestItemId) {
     questionId: "sc_item_option.item_option_new",
     referenceTable: "sc_item_option.item_option_new.reference",
     lookupTable: "sc_item_option.item_option_new.lookup_table",
+    listTable: "sc_item_option.item_option_new.list_table",
   });
   return { variables, skipped };
 }
 
-async function fetchProducerVariables(sysId) {
+async function fetchProducerVariables(source) {
+  const sysId = typeof source === "string" ? source : source && source.sysId;
+  const table = typeof source === "object" && source ? source.table : "";
   const fields = [
     "value",
+    "table_name",
+    "table_sys_id",
+    "document",
     "question",
     "question.name",
     "question.question_text",
@@ -606,11 +650,15 @@ async function fetchProducerVariables(sysId) {
     "question.order",
     "question.reference",
     "question.lookup_table",
+    "question.list_table",
   ].join(",");
-  const queries = ["document=" + sysId, "table_sys_id=" + sysId];
+  const queries = table && sysId
+    ? ["table_sys_id=" + sysId + "^table_name=" + table]
+    : [];
   const variables = new Map();
   let skipped = 0;
   let readAny = false;
+  const queriesUsed = [];
 
   for (const query of queries) {
     try {
@@ -620,6 +668,7 @@ async function fetchProducerVariables(sysId) {
       });
       if (!rows.length) continue;
       readAny = true;
+      queriesUsed.push(query);
       skipped += addVariablesFromRows(variables, rows, {
         name: "question.name",
         label: "question.question_text",
@@ -629,19 +678,32 @@ async function fetchProducerVariables(sysId) {
         questionId: "question",
         referenceTable: "question.reference",
         lookupTable: "question.lookup_table",
+        listTable: "question.list_table",
       });
-      break;
-    } catch (e) {
-      /* Some instances use only one of these key fields. Try the next shape. */
-    }
+    } catch (e) {}
   }
 
-  return { variables, skipped, readAny };
+  return { variables, skipped, readAny, queryUsed: queriesUsed.join(" | ") };
 }
 
 function isReferenceVariable(variable) {
   const type = String((variable && variable.type) || "").trim().toLowerCase();
   return type === "8" || type === "reference";
+}
+
+function isListReferenceVariable(variable) {
+  const type = String((variable && variable.type) || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+  return type === "21" || type === "list_collector" || type === "glide_list" || type === "glide-list";
+}
+
+function splitSysIdList(value) {
+  return String(value == null ? "" : value)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(isSysId);
 }
 
 function bestDisplayValue(row) {
@@ -680,18 +742,16 @@ function bestDisplayValue(row) {
 async function resolveReferenceDisplayValues(variables, onProgress) {
   const referenceVariables = Array.from(variables.values()).filter(
     (variable) =>
-      isReferenceVariable(variable) &&
-      isSysId(variable.value) &&
-      (!variable.displayValue || variable.displayValue === variable.value || isSysId(variable.displayValue)) &&
+      (isReferenceVariable(variable) || isListReferenceVariable(variable)) &&
+      (isSysId(variable.value) || splitSysIdList(variable.value).length > 0) &&
       variable.referenceTable
   );
   let index = 0;
 
   for (const variable of variables.values()) {
-    if (!isReferenceVariable(variable) || !isSysId(variable.value)) continue;
-    if (variable.displayValue && variable.displayValue !== variable.value && !isSysId(variable.displayValue)) {
-      continue;
-    }
+    const isList = isListReferenceVariable(variable);
+    const ids = isList ? splitSysIdList(variable.value) : [variable.value].filter(isSysId);
+    if ((!isReferenceVariable(variable) && !isList) || !ids.length) continue;
 
     const table = variable.referenceTable || "";
     if (!table) continue;
@@ -710,20 +770,35 @@ async function resolveReferenceDisplayValues(variables, onProgress) {
     try {
       const rows = await snGetMany(
         table,
-        "sys_id=" + variable.value,
+        ids.length === 1 ? "sys_id=" + ids[0] : "sys_idIN" + ids.join(","),
         "sys_id,name,number,display_name,title,short_description,u_name,u_display_name,u_site_name,u_location_name,u_label,street,city,state",
-        1,
+        ids.length,
         { displayAll: true, excludeRefLinks: true }
       );
-      let display = rows.length ? bestDisplayValue(rows[0]) : "";
-      if (!display) {
-        const broadRows = await snGetMany(table, "sys_id=" + variable.value, "", 1, {
+      const displayById = {};
+      rows.forEach((row) => {
+        const id = snFieldValue(row, "sys_id");
+        const display = bestDisplayValue(row);
+        if (id && display) displayById[id] = display;
+      });
+
+      const missingIds = ids.filter((id) => !displayById[id]);
+      if (missingIds.length) {
+        const broadRows = await snGetMany(table, "sys_idIN" + missingIds.join(","), "", missingIds.length, {
           displayAll: true,
           excludeRefLinks: true,
         });
-        display = broadRows.length ? bestDisplayValue(broadRows[0]) : "";
+        broadRows.forEach((row) => {
+          const id = snFieldValue(row, "sys_id");
+          const display = bestDisplayValue(row);
+          if (id && display) displayById[id] = display;
+        });
       }
-      if (display) variable.displayValue = display;
+
+      const displayValues = ids.map((id) => displayById[id] || id);
+      if (displayValues.some((display, idx) => display !== ids[idx])) {
+        variable.displayValue = displayValues.join(",");
+      }
     } catch (e) {
       /* Keep the sys_id fallback if reference display lookup is blocked. */
     }
@@ -761,8 +836,9 @@ async function fetchSourceVariables(source, onProgress) {
 
   try {
     if (onProgress) onProgress("Reading producer variables...");
-    const producer = await fetchProducerVariables(source.sysId);
+    const producer = await fetchProducerVariables(source);
     skipped += producer.skipped;
+    if (producer.queryUsed) source.producerAnswerQuery = producer.queryUsed;
     producer.variables.forEach((variable, name) => {
       if (!variables.has(name)) variables.set(name, variable);
     });
@@ -792,6 +868,15 @@ async function prefillPortalVariablesFromTicket(input) {
     const sourceResult = await fetchSourceVariables(source, (message) => showToast(message, false, 6000));
     const variables = sourceResult.variables;
     SNH.lastPrefillVariables = variables;
+    SNH.lastPrefillSource = {
+      input: value,
+      mode: source.mode,
+      sysId: source.sysId,
+      table: source.table,
+      number: source.number,
+      requestItemId: source.requestItemId,
+      producerAnswerQuery: source.producerAnswerQuery,
+    };
     if (!variables.length) {
       const suffix = sourceResult.skipped ? " (" + sourceResult.skipped + " unsupported)" : "";
       showToast("No copyable variables found" + suffix, true);
@@ -804,6 +889,7 @@ async function prefillPortalVariablesFromTicket(input) {
       type: "FILL_PORTAL_VARIABLES",
       variables,
     });
+    SNH.lastPrefillResult = resp || null;
 
     if (!resp || !resp.ok) {
       throw new Error((resp && resp.error) || "Couldn't fill portal variables.");
@@ -839,6 +925,8 @@ async function copyPortalVariableDebugInfo() {
     }
     const report = {
       url: location.href,
+      sourceInfo: SNH.lastPrefillSource,
+      fillResult: SNH.lastPrefillResult,
       sourceVariables: SNH.lastPrefillVariables.map((variable) => ({
         name: variable.name,
         label: variable.label,
@@ -1073,7 +1161,7 @@ function buildCommands() {
       keywords: ["variable", "prefill", "copy", "ritm", "sctask", "req", "catalog", "portal", "clone"],
       group: "Catalog",
       input: true,
-      placeholder: "RITM/SCTASK/REQ/task number or sys_id",
+      placeholder: "RITM/SCTASK/REQ/task number or submitted record sys_id",
       keepOpen: true,
       run: prefillPortalVariablesFromTicket,
     },
