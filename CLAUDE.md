@@ -56,6 +56,10 @@ the caller falls back gracefully.
 - **Field-name badges** parse the classic label id format `label.<table>.<field>`.
 
 ## Conventions & constraints
+- **IMPORTANT — Never delete a branch from GitHub or any Git remote.** Remote
+  branches must remain intact after merges and during cleanup. Cleanup may
+  delete a local branch only; it must never use `git push --delete`, GitHub's
+  branch deletion controls, or any equivalent remote-branch deletion action.
 - Keep it dependency-free vanilla JS. No bundler, no framework in extension
   pages: MV3's page CSP forbids `unsafe-eval`, so **AngularJS will not run in the
   popup** (its expression compiler uses the Function constructor). Content
