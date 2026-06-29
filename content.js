@@ -718,6 +718,18 @@ function isReferenceVariable(variable) {
   return type === "8" || type === "reference";
 }
 
+function isSingleLineTextVariable(variable) {
+  const type = normalizeVariableType((variable && variable.type) || "");
+  return (
+    type === "6" ||
+    type === "free_text" ||
+    type === "single_line" ||
+    type === "single_line_text" ||
+    type === "single-line_text" ||
+    type === "single-line-text"
+  );
+}
+
 function isListReferenceVariable(variable) {
   const type = String((variable && variable.type) || "")
     .trim()
@@ -760,15 +772,20 @@ function appendEmailSuffix(value, suffix) {
   const email = String(value == null ? "" : value);
   const atIndex = email.indexOf("@");
   if (atIndex < 0) return email + suffix;
-  return email.slice(0, atIndex) + suffix + email.slice(atIndex);
+  const dotIndex = email.indexOf(".", atIndex + 1);
+  const insertIndex = dotIndex < 0 ? email.length : dotIndex;
+  return email.slice(0, insertIndex) + suffix + email.slice(insertIndex);
 }
 
 function uniquifyCopiedSupplierFields(variables) {
   const matched = Array.from(variables.values()).filter((variable) => {
     const name = String((variable && variable.name) || "").trim().toLowerCase();
     return (
-      UNIQUE_SUPPLIER_NAME_FIELDS.has(name) ||
-      UNIQUE_SUPPLIER_EMAIL_FIELDS.has(name)
+      isSingleLineTextVariable(variable) &&
+      (
+        UNIQUE_SUPPLIER_NAME_FIELDS.has(name) ||
+        UNIQUE_SUPPLIER_EMAIL_FIELDS.has(name)
+      )
     );
   });
   if (!matched.length) return;
