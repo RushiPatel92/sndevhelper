@@ -69,6 +69,12 @@ the caller falls back gracefully.
   branches must remain intact after merges and during cleanup. Cleanup may
   delete a local branch only; it must never use `git push --delete`, GitHub's
   branch deletion controls, or any equivalent remote-branch deletion action.
+- Name new branches `YYYYMMDD-NN-category-description`, using the current
+  Europe/London date, a two-digit sequence starting at `01` for that date, and
+  lowercase kebab-case. Before creating a branch, inspect local and remote
+  branches with the same date prefix and use the next unused sequence.
+  Categories are `feature`, `fix`, `maintenance`, and `docs`. Keep `main`
+  unchanged. Example: `20260629-01-feature-debug-timeline`.
 - Keep it dependency-free vanilla JS. No bundler, no framework in extension
   pages: MV3's page CSP forbids `unsafe-eval`, so **AngularJS will not run in the
   popup** (its expression compiler uses the Function constructor). Content
