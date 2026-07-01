@@ -1,6 +1,6 @@
 /*
  * popup.js — instance info only.
- * All actions moved to the Ctrl+/ command palette (content.js).
+ * All actions moved to the backslash command palette (content.js).
  */
 
 const $ = (id) => document.getElementById(id);

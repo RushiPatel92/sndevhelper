@@ -1658,64 +1658,140 @@ let paletteShadow = null;
 let paletteInput = null;
 let paletteList = null;
 let paletteToast = null;
+let paletteCount = null;
+let palettePreviousFocus = null;
+let palettePosition = null;
+let paletteDragCleanup = null;
 let activeIndex = 0;
 let filteredCmds = [];
 let activeInputCmd = null; // command waiting for a text argument
 
 const PALETTE_CSS = `
   *{box-sizing:border-box;margin:0;padding:0}
-  :host{all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  :host{
+    all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --palette-bg:#181a24;
+    --palette-input:#10121a;
+    --palette-raised:#252938;
+    --palette-border:#4a5066;
+    --palette-border-subtle:#343a4d;
+    --palette-text:#f5f7ff;
+    --palette-body:#d8dbea;
+    --palette-secondary:#b4bbcc;
+    --palette-muted:#a3aabe;
+    --palette-placeholder:#929aae;
+    --palette-accent:#b2b2ff;
+    --palette-selected:#34385a;
+    --palette-hover:#262a3a;
+  }
   #overlay{
     position:fixed;inset:0;z-index:2147483647;
-    background:rgba(0,0,0,.45);display:flex;
-    align-items:flex-start;justify-content:center;padding-top:12vh;
+    background:rgba(10,10,18,.18);display:flex;
+    align-items:flex-start;justify-content:center;padding:clamp(48px,10vh,112px) 16px 24px;
   }
   #box{
-    background:#1e1e2e;border:1px solid #3a3a5c;border-radius:10px;
-    width:520px;max-width:calc(100vw - 32px);
-    box-shadow:0 24px 64px rgba(0,0,0,.6);overflow:hidden;
+    background:var(--palette-bg);border:1px solid var(--palette-border);border-radius:12px;
+    width:600px;max-width:calc(100vw - 20px);
+    box-shadow:0 28px 80px rgba(0,0,0,.65);overflow:hidden;
+  }
+  #palette-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 16px 10px;gap:16px;cursor:grab;
+    user-select:none;touch-action:none;
+  }
+  #palette-head.dragging{cursor:grabbing}
+  #palette-kicker{
+    color:var(--palette-muted);font-size:10px;font-weight:800;letter-spacing:.12em;
+    line-height:1.2;text-transform:uppercase;
+  }
+  #palette-title{
+    color:var(--palette-text);font-size:15px;font-weight:650;line-height:1.35;margin-top:2px;
+  }
+  #palette-title-row{display:flex;align-items:center;gap:5px}
+  #drag-indicator{
+    display:block;width:18px;height:18px;flex:0 0 18px;
+    opacity:.88;transition:opacity .08s;
+  }
+  #palette-head:hover #drag-indicator,#palette-head.dragging #drag-indicator{opacity:1}
+  #palette-drag-hint{color:var(--palette-muted);font-size:10px;line-height:1.35;margin-top:2px}
+  #shortcut-key{
+    display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:26px;
+    padding:0 8px;border:1px solid var(--palette-border);border-bottom-color:#687087;border-radius:6px;
+    background:var(--palette-raised);color:var(--palette-body);font:12px ui-monospace,SFMono-Regular,Consolas,monospace;
+    box-shadow:0 1px 0 rgba(255,255,255,.06);
   }
   #search-wrap{
-    display:flex;align-items:center;padding:12px 14px;
-    border-bottom:1px solid #2e2e4e;gap:8px;
+    display:flex;align-items:center;margin:0 12px 10px;padding:0 4px 0 12px;
+    min-height:42px;border:1px solid var(--palette-border);border-radius:8px;
+    background:var(--palette-input);gap:10px;
   }
-  #search-icon{color:#666;flex-shrink:0;font-size:15px}
+  #search-wrap:focus-within{
+    border-color:#8f91ff;box-shadow:0 0 0 3px rgba(143,145,255,.18);
+  }
   #search{
     flex:1;background:transparent;border:none;outline:none;
-    color:#e0e0f0;font-size:14px;caret-color:#7c7cf8;
+    min-width:0;color:var(--palette-text);font-size:14px;caret-color:var(--palette-accent);
   }
-  #search::placeholder{color:#555}
-  #kbd-hint{color:#555;font-size:11px;white-space:nowrap}
-  #results{max-height:360px;overflow-y:auto;padding:6px 0}
+  #search::placeholder{color:var(--palette-placeholder)}
+  #kbd-hint{color:var(--palette-muted);font-size:10px;white-space:nowrap;padding:0 7px}
+  #results{
+    max-height:min(420px,55vh);overflow-y:auto;padding:4px 8px 8px;
+    scrollbar-color:#596078 transparent;scrollbar-width:thin;
+  }
   .group-label{
-    color:#555;font-size:10px;font-weight:700;letter-spacing:.08em;
-    text-transform:uppercase;padding:10px 16px 4px;
+    color:var(--palette-secondary);font-size:10px;font-weight:800;letter-spacing:.1em;
+    text-transform:uppercase;padding:12px 10px 5px;
   }
   .cmd{
-    display:flex;align-items:center;padding:9px 16px;cursor:pointer;
-    gap:10px;color:#c0c0d8;font-size:13px;border-radius:0;
-    transition:background .08s;
+    position:relative;display:flex;align-items:center;min-height:38px;padding:8px 11px;
+    cursor:pointer;gap:12px;color:var(--palette-body);font-size:13px;border:1px solid transparent;
+    border-radius:7px;transition:background .08s,border-color .08s,color .08s;
   }
-  .cmd.active{background:#2d2d50;color:#fff}
-  .cmd:hover{background:#272740}
-  .cmd-name{flex:1}
-  .cmd-hint{color:#555;font-size:11px;font-family:monospace}
+  .cmd.active{
+    background:var(--palette-selected);border-color:#676da3;color:#fff;
+    box-shadow:inset 3px 0 0 var(--palette-accent);
+  }
+  .cmd:hover:not(.active){background:var(--palette-hover)}
+  .cmd-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cmd-hint{
+    color:var(--palette-muted);font-size:10px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+    white-space:nowrap;
+  }
   .cmd-input-row{
-    display:flex;align-items:center;padding:10px 16px;
-    border-top:1px solid #2e2e4e;gap:8px;
+    display:flex;flex-direction:column;align-items:stretch;padding:14px 16px 16px;
+    border-top:1px solid var(--palette-border-subtle);gap:8px;
   }
-  .cmd-input-label{color:#7c7cf8;font-size:12px;white-space:nowrap}
+  .cmd-input-label{color:var(--palette-accent);font-size:11px;font-weight:650}
   #arg-input{
-    flex:1;background:transparent;border:none;outline:none;
-    color:#e0e0f0;font-size:13px;
+    width:100%;background:var(--palette-input);border:1px solid var(--palette-border);border-radius:7px;outline:none;
+    color:var(--palette-text);font-size:13px;padding:9px 10px;
   }
-  #arg-input::placeholder{color:#555}
+  #arg-input:focus{border-color:#8f91ff;box-shadow:0 0 0 3px rgba(143,145,255,.18)}
+  #arg-input::placeholder{color:var(--palette-placeholder)}
   #toast{
-    display:none;padding:8px 16px;font-size:12px;
-    border-top:1px solid #2e2e4e;color:#a0e0b0;
+    display:none;padding:10px 16px;font-size:12px;
+    border-top:1px solid var(--palette-border-subtle);color:#a8e6b8;
   }
-  #toast.err{color:#ff8b8b}
-  #empty{padding:20px 16px;color:#555;font-size:13px;text-align:center}
+  #toast.err{color:#ff9d9d}
+  #empty{padding:34px 16px;color:var(--palette-secondary);font-size:13px;text-align:center}
+  #palette-footer{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    min-height:38px;padding:8px 16px;border-top:1px solid var(--palette-border-subtle);
+    color:var(--palette-muted);font-size:11px;
+  }
+  #key-help{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}
+  #key-help span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+  kbd{
+    min-width:22px;padding:2px 5px;border:1px solid var(--palette-border);border-radius:4px;
+    background:var(--palette-raised);color:#c1c7d8;text-align:center;
+    font:9px ui-monospace,SFMono-Regular,Consolas,monospace;
+  }
+  @media (max-width:520px){
+    #overlay{padding:24px 10px}
+    #palette-footer{align-items:flex-start;flex-direction:column;gap:6px}
+    #key-help{justify-content:flex-start}
+    #results{max-height:58vh}
+  }
 `;
 
 function showToast(msg, isErr, durationMs) {
@@ -1783,7 +1859,13 @@ function renderResults(query) {
   if (!filteredCmds.length) {
     paletteList.innerHTML = '<div id="empty">No commands match</div>';
     activeIndex = 0;
+    if (paletteCount) paletteCount.textContent = "0 commands";
     return;
+  }
+
+  if (paletteCount) {
+    paletteCount.textContent =
+      filteredCmds.length + (filteredCmds.length === 1 ? " command" : " commands");
   }
 
   let lastGroup = null;
@@ -1798,6 +1880,8 @@ function renderResults(query) {
     const el = document.createElement("div");
     el.className = "cmd" + (i === activeIndex ? " active" : "");
     el.dataset.idx = i;
+    el.setAttribute("role", "option");
+    el.setAttribute("aria-selected", i === activeIndex ? "true" : "false");
     el.innerHTML =
       `<span class="cmd-name">${cmd.name}</span>` +
       (cmd.hint ? `<span class="cmd-hint">${cmd.hint}</span>` : "");
@@ -1816,7 +1900,9 @@ function renderResults(query) {
 function highlightActive() {
   if (!paletteList) return;
   paletteList.querySelectorAll(".cmd").forEach((el) => {
-    el.classList.toggle("active", Number(el.dataset.idx) === activeIndex);
+    const isActive = Number(el.dataset.idx) === activeIndex;
+    el.classList.toggle("active", isActive);
+    el.setAttribute("aria-selected", isActive ? "true" : "false");
   });
   const active = paletteList.querySelector(".cmd.active");
   if (active) active.scrollIntoView({ block: "nearest" });
@@ -1881,12 +1967,140 @@ function showArgInput(cmd) {
   };
 }
 
+function clampPalettePosition(box, left, top, dimensions) {
+  const gutter = 8;
+  const size = dimensions || box.getBoundingClientRect();
+  const maxLeft = Math.max(gutter, window.innerWidth - size.width - gutter);
+  const maxTop = Math.max(gutter, window.innerHeight - size.height - gutter);
+  return {
+    left: Math.min(Math.max(gutter, left), maxLeft),
+    top: Math.min(Math.max(gutter, top), maxTop),
+  };
+}
+
+function positionPaletteBox(box, left, top, dimensions) {
+  if (!box) return;
+  const next = clampPalettePosition(box, left, top, dimensions);
+  box.style.position = "fixed";
+  box.style.left = next.left + "px";
+  box.style.top = next.top + "px";
+  box.style.margin = "0";
+  palettePosition = next;
+}
+
+function resetPalettePosition(box) {
+  palettePosition = null;
+  if (!box) return;
+  box.style.position = "";
+  box.style.left = "";
+  box.style.top = "";
+  box.style.margin = "";
+}
+
+function makePaletteDraggable(box, handle) {
+  if (!box || !handle) return () => {};
+  let drag = null;
+  let pendingPosition = null;
+  let dragFrame = 0;
+
+  const flushDragPosition = () => {
+    dragFrame = 0;
+    if (!drag || !pendingPosition) return;
+    positionPaletteBox(
+      box,
+      pendingPosition.left,
+      pendingPosition.top,
+      { width: drag.width, height: drag.height }
+    );
+    pendingPosition = null;
+  };
+
+  const stopDragging = (e) => {
+    if (!drag) return;
+    if (dragFrame) {
+      window.cancelAnimationFrame(dragFrame);
+      dragFrame = 0;
+    }
+    flushDragPosition();
+    drag = null;
+    pendingPosition = null;
+    handle.classList.remove("dragging");
+    try {
+      if (e && handle.hasPointerCapture(e.pointerId)) {
+        handle.releasePointerCapture(e.pointerId);
+      }
+    } catch (error) {}
+  };
+
+  const onPointerDown = (e) => {
+    if (e.button !== 0) return;
+    const rect = box.getBoundingClientRect();
+    drag = {
+      pointerId: e.pointerId,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    handle.classList.add("dragging");
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch (error) {}
+    e.preventDefault();
+  };
+
+  const onPointerMove = (e) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    pendingPosition = {
+      left: e.clientX - drag.offsetX,
+      top: e.clientY - drag.offsetY,
+    };
+    if (!dragFrame) {
+      dragFrame = window.requestAnimationFrame(flushDragPosition);
+    }
+  };
+
+  const onPointerUp = (e) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    stopDragging(e);
+  };
+
+  const onDoubleClick = (e) => {
+    e.preventDefault();
+    stopDragging(e);
+    resetPalettePosition(box);
+  };
+
+  const onResize = () => {
+    if (!palettePosition) return;
+    positionPaletteBox(box, palettePosition.left, palettePosition.top);
+  };
+
+  handle.addEventListener("pointerdown", onPointerDown);
+  handle.addEventListener("pointermove", onPointerMove);
+  handle.addEventListener("pointerup", onPointerUp);
+  handle.addEventListener("pointercancel", onPointerUp);
+  handle.addEventListener("dblclick", onDoubleClick);
+  window.addEventListener("resize", onResize);
+
+  return () => {
+    if (dragFrame) window.cancelAnimationFrame(dragFrame);
+    handle.removeEventListener("pointerdown", onPointerDown);
+    handle.removeEventListener("pointermove", onPointerMove);
+    handle.removeEventListener("pointerup", onPointerUp);
+    handle.removeEventListener("pointercancel", onPointerUp);
+    handle.removeEventListener("dblclick", onDoubleClick);
+    window.removeEventListener("resize", onResize);
+  };
+}
+
 function openPalette() {
   if (paletteHost) {
     paletteInput && paletteInput.focus();
     return;
   }
 
+  palettePreviousFocus = document.activeElement;
   paletteHost = document.createElement("div");
   paletteHost.id = "snh-palette-host";
   document.body.appendChild(paletteHost);
@@ -1895,14 +2109,32 @@ function openPalette() {
   paletteShadow.innerHTML = `
     <style>${PALETTE_CSS}</style>
     <div id="overlay">
-      <div id="box">
-        <div id="search-wrap">
-          <span id="search-icon">⌘</span>
-          <input id="search" placeholder="Search commands…" autocomplete="off" spellcheck="false" />
-          <span id="kbd-hint">ESC to close</span>
+      <div id="box" role="dialog" aria-modal="true" aria-labelledby="palette-title">
+        <div id="palette-head" title="Drag to move. Double-click to recenter.">
+          <div>
+            <div id="palette-kicker">SN Dev Helper</div>
+            <div id="palette-title-row">
+              <img id="drag-indicator" src="${chrome.runtime.getURL("icons/drag-indicator.svg")}" alt="" aria-hidden="true" />
+              <div id="palette-title">Command palette</div>
+            </div>
+            <div id="palette-drag-hint">Drag header to move. Double-click to recenter.</div>
+          </div>
+          <span id="shortcut-key" aria-label="Backslash shortcut">\\</span>
         </div>
-        <div id="results"></div>
+        <div id="search-wrap">
+          <input id="search" aria-label="Search commands" placeholder="Search commands…" autocomplete="off" spellcheck="false" />
+          <span id="kbd-hint">Type to filter</span>
+        </div>
+        <div id="results" role="listbox" aria-label="Available commands"></div>
         <div id="toast"></div>
+        <div id="palette-footer">
+          <span id="result-count" aria-live="polite"></span>
+          <div id="key-help" aria-label="Keyboard controls">
+            <span><kbd>Up / Down</kbd> Navigate</span>
+            <span><kbd>Enter</kbd> Run</span>
+            <span><kbd>Esc</kbd> Close</span>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -1910,6 +2142,13 @@ function openPalette() {
   paletteInput = paletteShadow.getElementById("search");
   paletteList  = paletteShadow.getElementById("results");
   paletteToast = paletteShadow.getElementById("toast");
+  paletteCount = paletteShadow.getElementById("result-count");
+  const paletteBox = paletteShadow.getElementById("box");
+  const paletteHead = paletteShadow.getElementById("palette-head");
+  paletteDragCleanup = makePaletteDraggable(paletteBox, paletteHead);
+  if (palettePosition) {
+    positionPaletteBox(paletteBox, palettePosition.left, palettePosition.top);
+  }
 
   activeIndex = 0;
   activeInputCmd = null;
@@ -1924,11 +2163,13 @@ function openPalette() {
   paletteInput.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      activeIndex = Math.min(activeIndex + 1, filteredCmds.length - 1);
+      if (filteredCmds.length) activeIndex = (activeIndex + 1) % filteredCmds.length;
       highlightActive();
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      activeIndex = Math.max(activeIndex - 1, 0);
+      if (filteredCmds.length) {
+        activeIndex = (activeIndex - 1 + filteredCmds.length) % filteredCmds.length;
+      }
       highlightActive();
     } else if (e.key === "Enter") {
       e.preventDefault();
@@ -1946,28 +2187,54 @@ function openPalette() {
 
 function closePalette() {
   if (paletteHost) {
+    if (paletteDragCleanup) paletteDragCleanup();
+    paletteDragCleanup = null;
     paletteHost.remove();
     paletteHost = null;
     paletteShadow = null;
     paletteInput = null;
     paletteList = null;
     paletteToast = null;
+    paletteCount = null;
     activeInputCmd = null;
+    if (palettePreviousFocus && typeof palettePreviousFocus.focus === "function") {
+      try {
+        palettePreviousFocus.focus({ preventScroll: true });
+      } catch (e) {
+        palettePreviousFocus.focus();
+      }
+    }
+    palettePreviousFocus = null;
   }
 }
 
-// Ctrl+\ listener — attached in EVERY frame, because in the classic UI the
+// Bare \ listener — attached in EVERY frame, because in the classic UI the
 // keypress usually lands inside the gsft_main iframe, not the top frame.
 // The top frame owns the single palette; sub-frames route the trigger up
-// through the background worker. (Ctrl+/ collides with snUtils; Alt+Space
-// with the ChatGPT desktop app.)
+// through the background worker. Editable controls are ignored so users can
+// still type a backslash into fields and code editors.
 const handledPaletteKeyEvents = new WeakSet();
 
+function isEditablePaletteShortcutTarget(e) {
+  const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
+  return path.some((node) => {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+    const tag = String(node.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return true;
+    if (node.isContentEditable) return true;
+    if (typeof node.matches !== "function") return false;
+    return node.matches(
+      '[contenteditable=""],[contenteditable="true"],[role="textbox"],' +
+      ".CodeMirror,.CodeMirror-code,.monaco-editor,.ace_editor"
+    );
+  });
+}
+
 function handlePaletteShortcut(e) {
-  if (handledPaletteKeyEvents.has(e)) return;
-  const isBackslash =
-    e.key === "\\" || e.code === "Backslash" || e.code === "IntlBackslash";
-  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && isBackslash) {
+  if (handledPaletteKeyEvents.has(e) || e.repeat) return;
+  const isBareBackslash =
+    e.key === "\\" && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
+  if (isBareBackslash && !isEditablePaletteShortcutTarget(e)) {
     handledPaletteKeyEvents.add(e);
     e.preventDefault();
     e.stopPropagation();
