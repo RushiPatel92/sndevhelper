@@ -713,11 +713,6 @@ async function fetchProducerVariables(source) {
   return { variables, skipped, readAny, queryUsed: queriesUsed.join(" | ") };
 }
 
-function isReferenceVariable(variable) {
-  const type = String((variable && variable.type) || "").trim().toLowerCase();
-  return type === "8" || type === "reference";
-}
-
 function isSingleLineTextVariable(variable) {
   const type = normalizeVariableType((variable && variable.type) || "");
   return (
@@ -728,14 +723,6 @@ function isSingleLineTextVariable(variable) {
     type === "single-line_text" ||
     type === "single-line-text"
   );
-}
-
-function isListReferenceVariable(variable) {
-  const type = String((variable && variable.type) || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-  return type === "21" || type === "list_collector" || type === "glide_list" || type === "glide-list";
 }
 
 function isAttachmentVariable(variable) {
@@ -815,160 +802,6 @@ function splitMaybeSysIdList(value) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-const FALLBACK_DISPLAY_FIELDS = [
-  "name",
-  "number",
-  "display_name",
-  "title",
-  "short_description",
-  "u_name",
-  "u_display_name",
-  "u_site_name",
-  "u_location_name",
-  "u_label",
-  "street",
-  "city",
-  "state",
-];
-const tableDisplayFieldCache = new Map();
-
-async function resolveTableDisplayField(table) {
-  const tableName = String(table || "").trim();
-  if (!/^[a-z][a-z0-9_]*$/i.test(tableName)) return "";
-  if (tableDisplayFieldCache.has(tableName)) {
-    return tableDisplayFieldCache.get(tableName);
-  }
-
-  let current = tableName;
-  let displayField = "";
-  try {
-    for (let hop = 0; hop < 8 && current; hop++) {
-      const dictionaries = await snGetMany(
-        "sys_dictionary",
-        "name=" + current + "^display=true^elementISNOTEMPTY",
-        "element",
-        1,
-        { displayAll: true, excludeRefLinks: true }
-      );
-      displayField = dictionaries.length
-        ? snFieldValue(dictionaries[0], "element").trim()
-        : "";
-      if (displayField) break;
-
-      const tables = await snGetMany(
-        "sys_db_object",
-        "name=" + current,
-        "super_class.name",
-        1,
-        { displayAll: true, excludeRefLinks: true }
-      );
-      current = tables.length
-        ? snFieldValue(tables[0], "super_class.name").trim()
-        : "";
-    }
-  } catch (e) {
-    displayField = "";
-  }
-
-  tableDisplayFieldCache.set(tableName, displayField);
-  return displayField;
-}
-
-function bestDisplayValue(row, preferredField) {
-  const displayFields = [preferredField]
-    .concat(FALLBACK_DISPLAY_FIELDS)
-    .filter((field, index, fields) => field && fields.indexOf(field) === index);
-  for (const field of displayFields) {
-    const value = snFieldDisplay(row, field);
-    if (value && !isSysId(value)) return value;
-  }
-
-  const locationParts = ["street", "city", "state"].map((field) => snFieldDisplay(row, field)).filter(Boolean);
-  if (locationParts.length) return locationParts.join(", ");
-
-  const preferredKeyPattern = /(^|_)(display|name|title|label|description|site|location)(_|$)/i;
-  const ignoredKeyPattern = /sys_|^u?active$|^id$|^value$|^link$|^order$/i;
-  const keys = Object.keys(row || {}).filter((key) => preferredKeyPattern.test(key) && !ignoredKeyPattern.test(key));
-  for (const key of keys) {
-    const value = snFieldDisplay(row, key);
-    if (value && !isSysId(value)) return value;
-  }
-
-  return "";
-}
-
-async function resolveReferenceDisplayValues(variables, onProgress) {
-  const referenceVariables = Array.from(variables.values()).filter(
-    (variable) =>
-      (isReferenceVariable(variable) || isListReferenceVariable(variable)) &&
-      (isSysId(variable.value) || splitSysIdList(variable.value).length > 0) &&
-      variable.referenceTable
-  );
-  let index = 0;
-
-  for (const variable of variables.values()) {
-    const isList = isListReferenceVariable(variable);
-    const ids = isList ? splitSysIdList(variable.value) : [variable.value].filter(isSysId);
-    if ((!isReferenceVariable(variable) && !isList) || !ids.length) continue;
-
-    const table = variable.referenceTable || "";
-    if (!table) continue;
-    index++;
-    if (onProgress) {
-      onProgress(
-        "Resolving reference values " +
-          index +
-          " of " +
-          referenceVariables.length +
-          ": " +
-          (variable.label || variable.name)
-      );
-    }
-
-    try {
-      const displayField = await resolveTableDisplayField(table);
-      variable.referenceDisplayField = displayField;
-      const requestedFields = ["sys_id", displayField]
-        .concat(FALLBACK_DISPLAY_FIELDS)
-        .filter((field, fieldIndex, fields) => field && fields.indexOf(field) === fieldIndex)
-        .join(",");
-      const rows = await snGetMany(
-        table,
-        ids.length === 1 ? "sys_id=" + ids[0] : "sys_idIN" + ids.join(","),
-        requestedFields,
-        ids.length,
-        { displayAll: true, excludeRefLinks: true }
-      );
-      const displayById = {};
-      rows.forEach((row) => {
-        const id = snFieldValue(row, "sys_id");
-        const display = bestDisplayValue(row, displayField);
-        if (id && display) displayById[id] = display;
-      });
-
-      const missingIds = ids.filter((id) => !displayById[id]);
-      if (missingIds.length) {
-        const broadRows = await snGetMany(table, "sys_idIN" + missingIds.join(","), "", missingIds.length, {
-          displayAll: true,
-          excludeRefLinks: true,
-        });
-        broadRows.forEach((row) => {
-          const id = snFieldValue(row, "sys_id");
-          const display = bestDisplayValue(row, displayField);
-          if (id && display) displayById[id] = display;
-        });
-      }
-
-      const displayValues = ids.map((id) => displayById[id] || id);
-      if (displayValues.some((display, idx) => display !== ids[idx])) {
-        variable.displayValue = displayValues.join(",");
-      }
-    } catch (e) {
-      /* Keep the sys_id fallback if reference display lookup is blocked. */
-    }
-  }
 }
 
 async function resolveAttachmentDisplayValues(variables, onProgress) {
@@ -1320,7 +1153,6 @@ async function fetchSourceVariables(source, onProgress) {
     currentCatalogItemDefinitionSysId(),
     onProgress
   );
-  await resolveReferenceDisplayValues(variables, onProgress);
   await resolveAttachmentDisplayValues(variables, onProgress);
   uniquifyCopiedSupplierFields(variables);
 

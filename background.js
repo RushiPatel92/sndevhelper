@@ -513,8 +513,20 @@ async function fillPortalVariables(variables) {
     return ["3", "5", "18", "choice", "multiple_choice", "select_box"].indexOf(type) >= 0;
   };
 
+  const asyncTriggerVariableNames = new Set([
+    "country_site",
+    "i_confirm_i_have_selected_all_company_codes",
+    "i_confirm_i_have_selected_all_company_codes_for_this_request",
+    "different_payment_for_each_cbu",
+    "customer_company_code",
+    "company_codes_associated_with_your_request",
+    "slm_customer_company_code",
+  ]);
+
   const isKnownAsyncTriggerVariable = (variable) =>
-    ["country_site"].indexOf(String((variable && variable.name) || "").toLowerCase()) >= 0;
+    asyncTriggerVariableNames.has(
+      String((variable && variable.name) || "").trim().toLowerCase()
+    );
 
   const findAngularFieldScopes = (el, variable) => {
     const angular = getAngular();
