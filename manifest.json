@@ -20,6 +20,12 @@
       "run_at": "document_idle"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/drag-indicator.svg"],
+      "matches": ["https://*.service-now.com/*"]
+    }
+  ],
   "commands": {
     "_execute_action": {
       "suggested_key": {
