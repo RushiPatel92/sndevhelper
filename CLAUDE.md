@@ -76,6 +76,9 @@ the caller falls back gracefully.
   alone is not completion. Stop after pushing the feature branch only when the
   user explicitly says "push branch only" or otherwise asks not to merge.
   Always preserve the remote feature branch.
+- When Codex materially contributes to a commit, add the official Git trailer
+  `Co-authored-by: Codex <noreply@openai.com>` to the commit message so GitHub
+  attributes Codex as a co-author and repository contributor.
 - Name new branches `YYYYMMDD-NN-category-description`, using the current
   Europe/London date, a two-digit sequence starting at `01` for that date, and
   lowercase kebab-case. Before creating a branch, inspect local and remote
