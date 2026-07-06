@@ -518,15 +518,13 @@ async function fillPortalVariables(variables) {
     "i_confirm_i_have_selected_all_company_codes",
     "i_confirm_i_have_selected_all_company_codes_for_this_request",
     "different_payment_for_each_cbu",
-    "customer_company_code",
     "company_codes_associated_with_your_request",
-    "slm_customer_company_code",
   ]);
 
-  const isKnownAsyncTriggerVariable = (variable) =>
-    asyncTriggerVariableNames.has(
-      String((variable && variable.name) || "").trim().toLowerCase()
-    );
+  const isKnownAsyncTriggerVariable = (variable) => {
+    const name = String((variable && variable.name) || "").trim().toLowerCase();
+    return asyncTriggerVariableNames.has(name) || /(^|_)company_code$/.test(name);
+  };
 
   const findAngularFieldScopes = (el, variable) => {
     const angular = getAngular();
