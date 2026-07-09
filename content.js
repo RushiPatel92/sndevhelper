@@ -1665,6 +1665,8 @@ let paletteDragCleanup = null;
 let activeIndex = 0;
 let filteredCmds = [];
 let activeInputCmd = null; // command waiting for a text argument
+const PALETTE_FAVORITE_STORAGE_KEY = "paletteFavoriteCommandId";
+let paletteFavoriteCommandId = null;
 
 const PALETTE_CSS = `
   *{box-sizing:border-box;margin:0;padding:0}
@@ -1681,6 +1683,7 @@ const PALETTE_CSS = `
     --palette-muted:#a3aabe;
     --palette-placeholder:#929aae;
     --palette-accent:#b2b2ff;
+    --palette-favorite:#ffd36a;
     --palette-selected:#34385a;
     --palette-hover:#262a3a;
   }
@@ -1757,6 +1760,15 @@ const PALETTE_CSS = `
     color:var(--palette-muted);font-size:10px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
     white-space:nowrap;
   }
+  .cmd-favorite{
+    display:inline-flex;align-items:center;justify-content:center;flex:0 0 26px;width:26px;height:26px;
+    border:1px solid transparent;border-radius:6px;background:transparent;color:var(--palette-muted);
+    cursor:pointer;font-size:16px;line-height:1;transition:background .08s,border-color .08s,color .08s;
+  }
+  .cmd-favorite:hover,.cmd-favorite:focus{
+    background:var(--palette-hover);border-color:var(--palette-border);color:var(--palette-favorite);outline:none;
+  }
+  .cmd-favorite.active{color:var(--palette-favorite)}
   .cmd-input-row{
     display:flex;flex-direction:column;align-items:stretch;padding:14px 16px 16px;
     border-top:1px solid var(--palette-border-subtle);gap:8px;
@@ -1842,17 +1854,88 @@ function showCopyFallback(text) {
   code.select();
 }
 
-function renderResults(query) {
-  if (!paletteList) return;
-  const cmds = buildCommands();
+function getPaletteStorage() {
+  if (
+    typeof chrome === "undefined" ||
+    !chrome.storage ||
+    !chrome.storage.local
+  ) {
+    return null;
+  }
+  return chrome.storage.local;
+}
+
+function loadPaletteFavorite(callback) {
+  const storage = getPaletteStorage();
+  if (!storage) {
+    callback();
+    return;
+  }
+  storage.get(PALETTE_FAVORITE_STORAGE_KEY, (result) => {
+    if (!chrome.runtime.lastError) {
+      const value = result && result[PALETTE_FAVORITE_STORAGE_KEY];
+      paletteFavoriteCommandId = typeof value === "string" ? value : null;
+    }
+    callback();
+  });
+}
+
+function savePaletteFavorite(commandId) {
+  const storage = getPaletteStorage();
+  if (!storage) return;
+  if (commandId) {
+    const update = {};
+    update[PALETTE_FAVORITE_STORAGE_KEY] = commandId;
+    storage.set(update);
+  } else {
+    storage.remove(PALETTE_FAVORITE_STORAGE_KEY);
+  }
+}
+
+function commandsForPalette(cmds, query) {
   const q = query.trim().toLowerCase();
-  filteredCmds = q
+  const matches = q
     ? cmds.filter(
         (c) =>
           c.name.toLowerCase().includes(q) ||
           (c.keywords || []).some((k) => k.includes(q))
       )
     : cmds;
+
+  if (!q && paletteFavoriteCommandId) {
+    const favorite = cmds.find((cmd) => cmd.id === paletteFavoriteCommandId);
+    if (favorite) {
+      return [
+        Object.assign({}, favorite, { group: "Favorite" }),
+        ...matches.filter((cmd) => cmd.id !== paletteFavoriteCommandId),
+      ];
+    }
+  }
+
+  return matches;
+}
+
+function toggleFavoriteCommand(cmd) {
+  if (!cmd || !cmd.id) return;
+  const isFavorite = paletteFavoriteCommandId === cmd.id;
+  paletteFavoriteCommandId = isFavorite ? null : cmd.id;
+  savePaletteFavorite(paletteFavoriteCommandId);
+  activeIndex =
+    paletteFavoriteCommandId && paletteInput && !paletteInput.value.trim()
+      ? 0
+      : activeIndex;
+  renderResults(paletteInput ? paletteInput.value : "");
+  showToast(
+    paletteFavoriteCommandId
+      ? "Default command set: " + cmd.name
+      : "Default command cleared"
+  );
+}
+
+function renderResults(query) {
+  if (!paletteList) return;
+  const cmds = buildCommands();
+  filteredCmds = commandsForPalette(cmds, query);
 
   paletteList.innerHTML = "";
 
@@ -1882,9 +1965,30 @@ function renderResults(query) {
     el.dataset.idx = i;
     el.setAttribute("role", "option");
     el.setAttribute("aria-selected", i === activeIndex ? "true" : "false");
-    el.innerHTML =
-      `<span class="cmd-name">${cmd.name}</span>` +
-      (cmd.hint ? `<span class="cmd-hint">${cmd.hint}</span>` : "");
+    const name = document.createElement("span");
+    name.className = "cmd-name";
+    name.textContent = cmd.name;
+    el.appendChild(name);
+    if (cmd.hint) {
+      const hint = document.createElement("span");
+      hint.className = "cmd-hint";
+      hint.textContent = cmd.hint;
+      el.appendChild(hint);
+    }
+    const favorite = document.createElement("button");
+    const isFavorite = paletteFavoriteCommandId === cmd.id;
+    favorite.type = "button";
+    favorite.className = "cmd-favorite" + (isFavorite ? " active" : "");
+    favorite.textContent = isFavorite ? "\u2605" : "\u2606";
+    favorite.title = isFavorite ? "Clear default command" : "Set as default command";
+    favorite.setAttribute("aria-label", favorite.title);
+    favorite.setAttribute("aria-pressed", isFavorite ? "true" : "false");
+    favorite.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleFavoriteCommand(cmd);
+    });
+    el.appendChild(favorite);
     el.addEventListener("mouseenter", () => {
       activeIndex = i;
       highlightActive();
@@ -2152,7 +2256,11 @@ function openPalette() {
 
   activeIndex = 0;
   activeInputCmd = null;
-  renderResults("");
+  loadPaletteFavorite(() => {
+    if (!paletteHost || !paletteInput) return;
+    activeIndex = 0;
+    renderResults(paletteInput.value);
+  });
   paletteInput.focus();
 
   paletteInput.addEventListener("input", () => {
