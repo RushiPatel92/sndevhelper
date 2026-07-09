@@ -566,6 +566,19 @@ function isUnsupportedVariableType(type) {
   return normalized && UNSUPPORTED_VARIABLE_TYPES.has(normalized);
 }
 
+// "18" is this instance's observed type code for the Hidden question type;
+// unlike the numeric codes above it isn't documented, so the display string
+// ("hidden") is checked too and takes precedence if the code ever differs.
+function isHiddenVariableType(type) {
+  const normalized = normalizeVariableType(type);
+  return normalized === "18" || normalized === "hidden";
+}
+
+function isSecretVariableType(type) {
+  const normalized = normalizeVariableType(type);
+  return normalized === "password" || normalized === "encrypted";
+}
+
 function parseVariableOrder(value) {
   const text = String(value == null ? "" : value).trim();
   if (!text) return { known: false, value: 0 };
@@ -1263,6 +1276,189 @@ async function copyPortalVariableDebugInfo() {
   }
 }
 
+/*
+ * Hidden portal variables: for a catalog item currently being filled out,
+ * find variables that are permanently "Hidden" type, or currently switched
+ * off by a UI Policy/catalog client script. Read-only inspector — never
+ * forces the live Angular form to reveal real editable fields.
+ */
+
+const SENSITIVE_VARIABLE_NAME_PATTERN =
+  /(password|passwd|secret|token|credential|api[_-]?key|private[_-]?key|authorization)/i;
+
+function isSensitiveVariableName(name, label) {
+  return (
+    SENSITIVE_VARIABLE_NAME_PATTERN.test(String(name || "")) ||
+    SENSITIVE_VARIABLE_NAME_PATTERN.test(String(label || ""))
+  );
+}
+
+const VARIABLE_DEFINITION_FIELDS = [
+  "sys_id",
+  "name",
+  "question_text",
+  "type",
+  "order",
+  "variable_set",
+  "reference",
+  "lookup_table",
+  "list_table",
+  "default_value",
+].join(",");
+
+async function fetchCatalogItemVariableDefinitions(catalogItemSysId) {
+  const definitions = new Map();
+
+  const addRows = (rows) => {
+    rows.forEach((row) => {
+      const name = snFieldValue(row, "name").trim();
+      if (!name || definitions.has(name)) return;
+      const type = snFieldValue(row, "type");
+      if (isUnsupportedVariableType(type) && !isSecretVariableType(type)) return;
+
+      const label = snFieldDisplay(row, "question_text") || name;
+      const secret = isSecretVariableType(type) || isSensitiveVariableName(name, label);
+      definitions.set(name, {
+        name,
+        label,
+        type,
+        typeDisplay: snFieldDisplay(row, "type") || type,
+        variableSet: snFieldValue(row, "variable_set"),
+        referenceTable:
+          snFieldValue(row, "reference") ||
+          snFieldValue(row, "lookup_table") ||
+          snFieldValue(row, "list_table"),
+        secret,
+        defaultValue: secret ? "" : snFieldValue(row, "default_value"),
+        hiddenType: isHiddenVariableType(type),
+        questionId: snFieldValue(row, "sys_id"),
+      });
+    });
+  };
+
+  const directRows = await snGetMany(
+    "item_option_new",
+    "cat_item=" + catalogItemSysId,
+    VARIABLE_DEFINITION_FIELDS,
+    300,
+    { displayAll: true, excludeRefLinks: true }
+  );
+  addRows(directRows);
+
+  const setRows = await snGetMany(
+    "io_set_item",
+    "sc_cat_item=" + catalogItemSysId,
+    "variable_set,order",
+    100,
+    { displayAll: true, excludeRefLinks: true }
+  );
+  const setIds = Array.from(
+    new Set(setRows.map((row) => snFieldValue(row, "variable_set")).filter(isSysId))
+  );
+
+  if (setIds.length) {
+    const setVariableRows = await snGetMany(
+      "item_option_new",
+      "variable_setIN" + setIds.join(","),
+      VARIABLE_DEFINITION_FIELDS,
+      500,
+      { displayAll: true, excludeRefLinks: true }
+    );
+    addRows(setVariableRows);
+  }
+
+  return Array.from(definitions.values());
+}
+
+function classifyHiddenVariables(definitions, perVariableResults) {
+  const resultByName = new Map();
+  (perVariableResults || []).forEach((entry) => {
+    if (entry && entry.name) resultByName.set(entry.name, entry);
+  });
+
+  const rows = [];
+  definitions.forEach((def) => {
+    const domResult = resultByName.get(def.name) || {};
+    let bucket = null;
+    if (def.hiddenType) {
+      bucket = "hidden-type";
+    } else if (domResult.foundEl && domResult.visible === false) {
+      bucket = "invisible";
+    } else if (!domResult.foundEl) {
+      bucket = "absent";
+    }
+    if (!bucket) return; // present and visible: not hidden, don't report it
+
+    let value = "";
+    let valueSource = "none";
+    if (def.secret) {
+      value = "[REDACTED]";
+      valueSource = "redacted";
+    } else if (domResult.liveValueAvailable) {
+      value = domResult.liveValue;
+      valueSource = "live";
+    } else if (def.defaultValue) {
+      value = def.defaultValue;
+      valueSource = "default";
+    }
+
+    rows.push({
+      name: def.name,
+      label: def.label,
+      type: def.typeDisplay,
+      bucket,
+      secret: def.secret,
+      value,
+      valueSource,
+      gFormReportedVisible:
+        domResult.gFormReportedVisible == null ? null : domResult.gFormReportedVisible,
+    });
+  });
+  return rows;
+}
+
+async function showHiddenPortalVariables() {
+  const catalogItemSysId = currentCatalogItemDefinitionSysId();
+  if (!isSysId(catalogItemSysId)) {
+    showToast("Open a Service Portal catalog item first", true);
+    return;
+  }
+
+  showToast("Reading variable definitions...", false, 6000);
+  try {
+    const definitions = await fetchCatalogItemVariableDefinitions(catalogItemSysId);
+    if (!definitions.length) {
+      showToast("No variables found on this catalog item", true);
+      return;
+    }
+
+    showToast("Checking " + definitions.length + " variables...", false, 6000);
+    const resp = await chrome.runtime.sendMessage({
+      type: "GET_HIDDEN_PORTAL_VARIABLES",
+      catalogItemSysId,
+      variables: definitions,
+    });
+    if (!resp || !resp.ok) {
+      throw new Error((resp && resp.error) || "Couldn't inspect the form.");
+    }
+    if (!resp.foundForm) {
+      showToast("Open a catalog order form first", true);
+      return;
+    }
+
+    const rows = classifyHiddenVariables(definitions, resp.perVariable);
+    if (!rows.length) {
+      showToast("No hidden variables found");
+      return;
+    }
+
+    globalThis.SNHiddenVariablesUI.showResults({ foundForm: resp.foundForm, rows });
+    closePalette();
+  } catch (error) {
+    showToast(String(error && error.message ? error.message : error), true);
+  }
+}
+
 // Walk up the table hierarchy to find where the field's dictionary entry lives.
 async function resolveDefiningTable(startTable, field) {
   let table = startTable;
@@ -1616,6 +1812,14 @@ function buildCommands() {
       group: "Catalog",
       keepOpen: true,
       run: copyPortalVariableDebugInfo,
+    },
+    {
+      id: "show-hidden-variables",
+      name: "Show hidden variables",
+      keywords: ["hidden", "variable", "catalog", "ui policy", "client script", "variable set", "sc_cat_item"],
+      group: "Catalog",
+      keepOpen: true,
+      run: showHiddenPortalVariables,
     },
     {
       id: "open-table-list",

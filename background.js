@@ -2230,6 +2230,433 @@ function inspectPortalVariableDebug() {
   return report;
 }
 
+// Self-contained MAIN-world inspector for hidden/switched-off catalog
+// variables. Duplicates helpers from fillPortalVariables/inspectPortalVariableDebug
+// rather than sharing them, since executeScript({func}) only serializes the
+// one function passed to it. Never touches DOM/gForm for secret variables so
+// their values can't cross the runtime.sendMessage boundary.
+function inspectHiddenPortalVariables(variables) {
+  const list = Array.isArray(variables) ? variables : [];
+  const result = { foundForm: false, matchedCount: 0, results: [] };
+
+  const isGForm = (candidate) =>
+    candidate &&
+    typeof candidate.getValue === "function" &&
+    typeof candidate.setValue === "function";
+
+  const currentCatalogItemSysId = () => {
+    try {
+      const url = new URL(location.href);
+      const sysId = url.searchParams.get("sys_id");
+      if (sysId && /^[0-9a-f]{32}$/i.test(sysId)) return sysId;
+    } catch (e) {}
+
+    try {
+      const el = document.querySelector("[cat-item-sys-id],[data-item-sys-id],[data-sys-id]");
+      const sysId =
+        (el && (el.getAttribute("cat-item-sys-id") || el.getAttribute("data-item-sys-id") || el.getAttribute("data-sys-id"))) ||
+        "";
+      if (/^[0-9a-f]{32}$/i.test(sysId)) return sysId;
+    } catch (e) {}
+
+    return "";
+  };
+
+  const gFormSysId = (gForm) => {
+    try {
+      return typeof gForm.getSysId === "function" ? String(gForm.getSysId() || "") : "";
+    } catch (e) {
+      return "";
+    }
+  };
+
+  const scoreGForm = (gForm, scope, el, itemSysId, source) => {
+    if (!isGForm(gForm)) return -1;
+    let score = 0;
+    const sysId = gFormSysId(gForm);
+    if (source && source.indexOf("getGlideForm()") >= 0) score += 300;
+    if (source === "scope.page.g_form" || source === "scope.page.gForm") score += 250;
+    if (source === "scope.g_form" || source === "scope.gForm") score += 150;
+    if (itemSysId && sysId === itemSysId) score += 100;
+    if (sysId === "-1") score += 80;
+    if (!sysId) score += 10;
+
+    try {
+      if (scope && scope.c && typeof scope.c.getItemId === "function" && scope.c.getItemId() === itemSysId) {
+        score += 100;
+      }
+    } catch (e) {}
+    try {
+      if (scope && scope.data && scope.data.sc_cat_item && scope.data.sc_cat_item.sys_id === itemSysId) {
+        score += 80;
+      }
+    } catch (e) {}
+    try {
+      if (scope && scope.data && scope.data.sys_id === itemSysId) score += 40;
+    } catch (e) {}
+    try {
+      if (el && el.id === "sc_cat_item") score += 150;
+    } catch (e) {}
+    try {
+      if (el && el.matches && el.matches("sp-variable-layout,sp-cat-item,sp-sc-cat-item,.sc-form,.catalog-form,[sp-model]")) {
+        score += 25;
+      }
+    } catch (e) {}
+
+    return score;
+  };
+
+  const findGFormsInObject = (obj, depth, seen, found) => {
+    if (!obj || typeof obj !== "object" || depth > 3) return;
+    if (seen.indexOf(obj) >= 0) return null;
+    seen.push(obj);
+    if (isGForm(obj) && found.indexOf(obj) < 0) found.push(obj);
+
+    const directKeys = ["g_form", "gForm", "page", "c", "data", "$parent"];
+    for (const key of directKeys) {
+      try {
+        findGFormsInObject(obj[key], depth + 1, seen, found);
+      } catch (e) {}
+    }
+  };
+
+  const getAngular = () => {
+    try {
+      return window.angular || null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const findPortalGForm = () => {
+    const itemSysId = currentCatalogItemSysId();
+    const candidates = [];
+    const addCandidate = (gForm, scope, el, source) => {
+      if (!isGForm(gForm)) return;
+      if (candidates.some((candidate) => candidate.gForm === gForm)) return;
+      candidates.push({
+        gForm,
+        score: scoreGForm(gForm, scope, el, itemSysId, source),
+        source,
+      });
+    };
+    const addScopeCandidates = (scope, el, sourcePrefix) => {
+      if (!scope) return;
+      try {
+        if (scope.page) {
+          addCandidate(scope.page.g_form, scope, el, sourcePrefix + ".page.g_form");
+          addCandidate(scope.page.gForm, scope, el, sourcePrefix + ".page.gForm");
+        }
+      } catch (e) {}
+      try {
+        addCandidate(scope.g_form, scope, el, sourcePrefix + ".g_form");
+        addCandidate(scope.gForm, scope, el, sourcePrefix + ".gForm");
+      } catch (e) {}
+      try {
+        if (typeof scope.getGlideForm === "function") {
+          addCandidate(scope.getGlideForm(), scope, el, sourcePrefix + ".getGlideForm()");
+        }
+      } catch (e) {}
+      try {
+        if (scope.$parent && typeof scope.$parent.getGlideForm === "function") {
+          addCandidate(scope.$parent.getGlideForm(), scope.$parent, el, sourcePrefix + ".$parent.getGlideForm()");
+        }
+      } catch (e) {}
+    };
+
+    try {
+      if (typeof g_form !== "undefined") addCandidate(g_form, null, document.body, "global");
+    } catch (e) {}
+
+    const angular = getAngular();
+    if (!angular || !angular.element) {
+      candidates.sort((a, b) => b.score - a.score);
+      return candidates.length ? candidates[0].gForm : null;
+    }
+
+    const selectors = [
+      "#sc_cat_item",
+      "#sc_cat_item sp-variable-layout",
+      "sp-variable-layout#sc_cat_item\\.do",
+      "sp-variable-layout",
+      "sp-cat-item",
+      "sp-sc-cat-item",
+      ".sc-form",
+      ".catalog-form",
+      "[sp-model]",
+      "[ng-controller]",
+      "body",
+    ];
+    const elements = [];
+    selectors.forEach((selector) => {
+      try {
+        document.querySelectorAll(selector).forEach((el) => elements.push(el));
+      } catch (e) {}
+    });
+
+    for (const el of elements) {
+      try {
+        const wrapped = angular.element(el);
+        const scopes = [];
+        if (wrapped.scope) scopes.push(wrapped.scope());
+        if (wrapped.isolateScope) scopes.push(wrapped.isolateScope());
+        for (let i = 0; i < scopes.length; i++) {
+          const scope = scopes[i];
+          addScopeCandidates(scope, el, "scope" + i);
+          const found = [];
+          findGFormsInObject(scope, 0, [], found);
+          found.forEach((gForm) => addCandidate(gForm, scope, el, "scope"));
+        }
+      } catch (e) {}
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates.length ? candidates[0].gForm : null;
+  };
+
+  const hasPortalFormContainer = () => {
+    try {
+      return Boolean(
+        document.querySelector(
+          "#sc_cat_item,sp-variable-layout,sp-cat-item,sp-sc-cat-item,.sc-form,.catalog-form,[sp-model]"
+        )
+      );
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const getElementValue = (el) => {
+    if (!el) return "";
+    if (el.type === "checkbox") return el.checked ? "true" : "";
+    if (el.type === "radio") {
+      const checked = document.querySelector(
+        'input[type="radio"][name="' + el.name.replace(/"/g, '\\"') + '"]:checked'
+      );
+      return checked ? checked.value : "";
+    }
+    return el.value != null ? el.value : el.textContent;
+  };
+
+  const normalizeComparable = (value) =>
+    String(value == null ? "" : value)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+
+  const sameValue = (left, right) => {
+    const a = normalizeComparable(left);
+    const b = normalizeComparable(right);
+    return Boolean(a && b && a === b);
+  };
+
+  const visibleText = (el) =>
+    el && String(el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim();
+
+  const variableKeys = (variable) => {
+    const keys = [];
+    const add = (value) => {
+      if (value && keys.indexOf(value) < 0) keys.push(value);
+    };
+    add(variable && variable.name);
+    if (variable && variable.name) add("variables." + variable.name);
+    if (variable && variable.questionId) {
+      add(variable.questionId);
+      add("IO:" + variable.questionId);
+      add("ni.IO:" + variable.questionId);
+      add("sys_original.IO:" + variable.questionId);
+    }
+    return keys;
+  };
+
+  const findDomField = (variable) => {
+    const label = variable && variable.label;
+    const keys = variableKeys(variable);
+    const attrMatchesVariable = (attr) => {
+      if (!attr) return false;
+      const variants = [attr];
+      if (attr.indexOf("s2id_") === 0) variants.push(attr.replace(/^s2id_/, ""));
+      variants.slice().forEach((variant) => {
+        if (variant.indexOf("sp_formfield_") === 0) {
+          variants.push(variant.replace(/^sp_formfield_/, ""));
+        }
+      });
+      return variants.some((variant) => keys.indexOf(variant) >= 0 || (label && sameValue(variant, label)));
+    };
+    const labelMatchesText = (el) => {
+      if (!label || !el) return false;
+      const expected = normalizeComparable(label);
+      const actual = normalizeComparable(visibleText(el));
+      return Boolean(expected && actual && (actual === expected || actual.indexOf(expected) >= 0));
+    };
+    const candidates = Array.from(
+      document.querySelectorAll("input,textarea,select,[contenteditable='true']")
+    ).filter((el) => el.type !== "hidden");
+
+    const direct = candidates.find((el) => {
+      const attrs = [
+        el.getAttribute("name"),
+        el.getAttribute("id"),
+        el.getAttribute("data-name"),
+        el.getAttribute("data-variable-name"),
+        el.getAttribute("data-field"),
+        el.getAttribute("data-field-name"),
+        el.getAttribute("aria-label"),
+      ].filter(Boolean);
+      return attrs.some(attrMatchesVariable) ||
+        labelMatchesText(el.closest("label"));
+    });
+
+    if (direct) return direct;
+
+    const fieldContainers = Array.from(
+      document.querySelectorAll(
+        "fieldset,.form-group,.question,sp-variable,.select2-container,[id^='sp_formfield_'],[id^='s2id_sp_formfield_'],[data-variable-name],[data-field-name],[data-name]"
+      )
+    );
+    candidates.forEach((candidate) => {
+      let node = candidate.parentElement;
+      for (let i = 0; node && i < 5; i++, node = node.parentElement) {
+        if (fieldContainers.indexOf(node) < 0) fieldContainers.push(node);
+      }
+    });
+
+    const matchesContainer = (el) => {
+      const attrs = [
+        el.getAttribute("id"),
+        el.getAttribute("name"),
+        el.getAttribute("data-name"),
+        el.getAttribute("data-variable-name"),
+        el.getAttribute("data-field"),
+        el.getAttribute("data-field-name"),
+        el.getAttribute("aria-label"),
+      ].filter(Boolean);
+
+      const matchedByAttr = attrs.some(attrMatchesVariable);
+      if (matchedByAttr) return true;
+      return labelMatchesText(el);
+    };
+
+    const container = fieldContainers.find(matchesContainer);
+    if (!container) return null;
+    if (container.classList && container.classList.contains("select2-container")) {
+      const originalId = container.id && container.id.indexOf("s2id_") === 0
+        ? container.id.replace(/^s2id_/, "")
+        : "";
+      const original = originalId ? document.getElementById(originalId) : null;
+      if (original) return original;
+      return container.querySelector("input.select2-input,input:not([type='hidden']),textarea,select,[contenteditable='true']");
+    }
+    if (
+      container.matches &&
+      container.matches("input:not([type='hidden']),textarea,select,[contenteditable='true']")
+    ) {
+      return container;
+    }
+    return container.querySelector("input:not([type='hidden']),textarea,select,[contenteditable='true']");
+  };
+
+  const findGFormTarget = (gForm, variable) => {
+    if (!gForm || !variable) return null;
+    const keys = variableKeys(variable);
+    for (const key of keys) {
+      let field = null;
+      try {
+        if (typeof gForm.getField === "function") field = gForm.getField(key);
+      } catch (e) {}
+      try {
+        if (!field && typeof gForm.getGlideUIElement === "function") {
+          field = gForm.getGlideUIElement(key);
+        }
+      } catch (e) {}
+      if (field) return { key, field };
+    }
+    return null;
+  };
+
+  const gFormGetValue = (gForm, variable) => {
+    if (!gForm || typeof gForm.getValue !== "function") {
+      return { available: false, value: undefined };
+    }
+    const keys = variableKeys(variable);
+    for (const key of keys) {
+      try {
+        const current = gForm.getValue(key);
+        if (current !== undefined && current !== null) {
+          return { available: true, value: current };
+        }
+      } catch (e) {}
+    }
+    return { available: false, value: undefined };
+  };
+
+  const gFormReportedVisible = (gForm, variable) => {
+    try {
+      const target = findGFormTarget(gForm, variable);
+      if (target && target.field && typeof target.field.visible === "boolean") {
+        return target.field.visible;
+      }
+      if (gForm && typeof gForm.isVisible === "function") {
+        const keys = variableKeys(variable);
+        for (const key of keys) {
+          try {
+            const value = gForm.isVisible(key);
+            if (typeof value === "boolean") return value;
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  const isElementVisible = (el) => Boolean(el && el.offsetParent !== null);
+
+  result.foundForm = hasPortalFormContainer();
+  const gForm = findPortalGForm();
+
+  list.forEach((variable) => {
+    const entry = {
+      name: variable && variable.name,
+      foundEl: false,
+      visible: false,
+      liveValue: "",
+      liveValueAvailable: false,
+      gFormReportedVisible: null,
+    };
+
+    if (!variable || !variable.name || variable.secret) {
+      result.results.push(entry);
+      return;
+    }
+
+    const el = findDomField(variable);
+    entry.foundEl = Boolean(el);
+    entry.visible = isElementVisible(el);
+    if (entry.foundEl) result.matchedCount++;
+
+    if (gForm) {
+      const gFormValue = gFormGetValue(gForm, variable);
+      if (gFormValue.available) {
+        entry.liveValue = gFormValue.value;
+        entry.liveValueAvailable = true;
+      }
+      entry.gFormReportedVisible = gFormReportedVisible(gForm, variable);
+    }
+
+    if (!entry.liveValueAvailable && el) {
+      const elValue = getElementValue(el);
+      if (elValue !== "" && elValue != null) {
+        entry.liveValue = elValue;
+        entry.liveValueAvailable = true;
+      }
+    }
+
+    result.results.push(entry);
+  });
+
+  return result;
+}
+
 // Content scripts can't call chrome.tabs.create; they ask us via OPEN_URL.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "OPEN_URL" && msg.url) {
@@ -2438,6 +2865,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         ok: true,
         frames: results.map((item) => item && item.result).filter(Boolean),
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: String(error) });
+    });
+    return true;
+  }
+  if (msg && msg.type === "GET_HIDDEN_PORTAL_VARIABLES" && sender.tab) {
+    const variables = Array.isArray(msg.variables) ? msg.variables : [];
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id, allFrames: true },
+      world: "MAIN",
+      func: inspectHiddenPortalVariables,
+      args: [variables],
+    }).then((results) => {
+      const frameResults = results
+        .map((item) => item && item.result)
+        .filter(Boolean);
+      const found = frameResults
+        .filter((item) => item.foundForm)
+        .sort((a, b) => (b.matchedCount || 0) - (a.matchedCount || 0))[0];
+      sendResponse({
+        ok: true,
+        foundForm: Boolean(found),
+        perVariable: found ? found.results || [] : [],
       });
     }).catch((error) => {
       sendResponse({ ok: false, error: String(error) });
