@@ -22,67 +22,73 @@ The extension is not on the Chrome Web Store — you load it "unpacked" from a
 folder on your PC. This is a one-time setup; after that you just reload it when
 there's a new version.
 
+> **Microsoft Edge works too.** Edge is Chromium-based and runs this extension
+> unchanged. Follow the same steps below, but use `edge://extensions` wherever
+> they say `chrome://extensions`.
+
 ### 1. Download the zip
 
-1. Open the repository page: <https://github.com/sasukepatel/sndevhelper>
+1. Open the repository page: <https://github.com/RushiPatel92/sndevhelper>
 2. Click the green **Code** button near the top of the file list.
 3. Choose **Download ZIP**. Your browser saves something like
    `sndevhelper-main.zip` to your Downloads folder.
 
    Direct link:
-   <https://github.com/sasukepatel/sndevhelper/archive/refs/heads/main.zip>
+   <https://github.com/RushiPatel92/sndevhelper/archive/refs/heads/main.zip>
 
 ### 2. Extract it to a permanent location
 
-Chrome loads the extension **from the folder, not the zip**, and it re-reads
-that folder every time Chrome starts. So put it somewhere stable that you won't
-delete or move — **do not leave it in Downloads or a temp folder.**
+Your browser loads the extension **from the folder, not the zip**, and it
+re-reads that folder every time the browser starts. So put it somewhere stable
+that you won't delete or move — **do not leave it in Downloads or a temp
+folder.**
 
 A good home on Windows is a dedicated folder in your user profile, for example:
 
 ```
-C:\Users\<you>\ChromeExtensions\SnDevHelper
+C:\Users\<you>\BrowserExtensions\SnDevHelper
 ```
 
 To extract:
 
 1. Right-click the downloaded `.zip` → **Extract All…**
 2. Set the destination to your permanent folder (e.g.
-   `C:\Users\<you>\ChromeExtensions\`) and extract.
+   `C:\Users\<you>\BrowserExtensions\`) and extract.
 3. Open the extracted folder. GitHub zips wrap everything in an inner folder
    (e.g. `sndevhelper-main`). Make sure you can see
    **`manifest.json`** directly inside the folder you plan to load — that file
-   must sit at the top level of the folder you point Chrome at.
+   must sit at the top level of the folder you point the browser at.
 
 > Tip: if the folder you extracted contains a single sub-folder and that
 > sub-folder holds `manifest.json`, load the sub-folder.
 
-### 3. Load it in Chrome
+### 3. Load it in your browser
 
-1. Open Chrome and go to `chrome://extensions` (paste it into the address bar).
-2. Turn on **Developer mode** using the toggle in the top-right corner.
-3. Click **Load unpacked** (top-left).
+1. Go to `chrome://extensions` (on Edge: `edge://extensions`) by pasting it into
+   the address bar.
+2. Turn on **Developer mode** — top-right in Chrome, bottom-left in Edge.
+3. Click **Load unpacked**.
 4. Browse to the folder that contains `manifest.json` and click **Select
    Folder**.
 5. "SN Dev Helper" now appears as a card in your extensions list.
 
 ### 4. Pin it (optional but recommended)
 
-Click the puzzle-piece **Extensions** icon in the Chrome toolbar, then the pin
-next to **SN Dev Helper** so its icon stays visible.
+Click the puzzle-piece **Extensions** icon in the toolbar, then the pin next to
+**SN Dev Helper** so its icon stays visible.
 
 ### Updating to a newer version
 
 1. Download and extract the new zip **into the same folder**, replacing the old
-   files (or extract fresh and re-point Chrome at the new folder).
-2. Go to `chrome://extensions` and click the **reload** (↻) icon on the SN Dev
-   Helper card.
+   files (or extract fresh and re-point the browser at the new folder).
+2. Go to `chrome://extensions` (or `edge://extensions`) and click the **reload**
+   (↻) icon on the SN Dev Helper card.
 3. Refresh any open ServiceNow tab so the updated content script loads.
 
 ### Troubleshooting
 
-- **"Manifest file is missing or unreadable"** — you pointed Chrome at the wrong
-  folder. Select the folder that directly contains `manifest.json`.
+- **"Manifest file is missing or unreadable"** — you pointed the browser at the
+  wrong folder. Select the folder that directly contains `manifest.json`.
 - **Icon/popup does nothing on a page** — the extension only activates on
   `*.service-now.com` URLs. Open a ServiceNow instance first.
 - **Toggles or badges disappeared after the form changed** — toggles are manual
@@ -99,6 +105,9 @@ next to **SN Dev Helper** so its icon stays visible.
 | `Ctrl+Shift+K` (`Cmd+Shift+K` on Mac) | Open the toolbar popup |
 | `\` (backslash) | Open the command palette on the current ServiceNow tab |
 | `Alt+Shift+F` | Toggle technical field names on the current form |
+
+If a shortcut does nothing, another browser feature may have claimed it — rebind
+it at `chrome://extensions/shortcuts` (or `edge://extensions/shortcuts`).
 
 The popup shows detected instance information. Almost all actions live in the
 `\` command palette — start typing to filter, use arrow keys and `Enter` to run,
