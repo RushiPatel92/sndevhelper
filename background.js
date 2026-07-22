@@ -2581,8 +2581,17 @@ function inspectHiddenPortalVariables(variables) {
     const keys = variableKeys(variable);
     for (const key of keys) {
       try {
-        const current = gForm.getValue(key);
+        let current = gForm.getValue(key);
         if (current !== undefined && current !== null) {
+          // Multi-row variable sets return an array/object; serialize it so it
+          // survives chrome.runtime messaging and renders as readable JSON.
+          if (typeof current === "object") {
+            try {
+              current = JSON.stringify(current);
+            } catch (e) {
+              current = String(current);
+            }
+          }
           return { available: true, value: current };
         }
       } catch (e) {}

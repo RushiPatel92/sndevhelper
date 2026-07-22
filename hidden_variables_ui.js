@@ -1,7 +1,9 @@
 /*
- * Isolated-world UI for the "Show hidden variables" command.
+ * Isolated-world UI for the "Show variable values" command.
  * Loaded before content.js so the command-palette action can call the
  * public API. Read-only inspector — never modifies the live form.
+ * Lists every catalog variable with its value; visibility (hidden/visible)
+ * is a filterable tag so nothing is ever silently dropped from the list.
  */
 
 (() => {
@@ -13,11 +15,14 @@
   let lastResult = null;
   let activeFilter = "all";
   let searchQuery = "";
+  let hideEmpty = false;
 
   const BUCKET_LABELS = {
     "hidden-type": "Hidden type",
     invisible: "Hidden by policy/script",
     absent: "Not rendered",
+    visible: "Visible",
+    mrvs: "Multi-row set",
   };
 
   const UI_CSS = `
@@ -69,6 +74,15 @@
     }
     .filter:hover{background:#343453;color:#fff}
     .filter.active{background:#373766;border-color:#6262a1;color:#fff}
+    .toggle{
+      border:1px solid #3a3a5c;background:#292941;color:#9898b2;
+      border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;
+      display:inline-flex;align-items:center;gap:6px;
+    }
+    .toggle:hover{background:#343453;color:#fff}
+    .toggle.active{background:#2a3d33;border-color:#3d6b52;color:#bfe6ce}
+    .toggle .dot{width:7px;height:7px;border-radius:50%;background:#55556f}
+    .toggle.active .dot{background:#5fcf90}
     .search{
       margin-left:auto;width:230px;max-width:38vw;background:#151522;
       border:1px solid #353553;border-radius:6px;color:#e5e5f4;
@@ -96,10 +110,19 @@
     .badge.hidden-type{color:#ffb1b1;background:#432a36;border-color:#684050}
     .badge.invisible{color:#a9d5ff;background:#24364a;border-color:#365573}
     .badge.absent{color:#b5e4c2;background:#263b35;border-color:#39594d}
+    .badge.visible{color:#8f9bb3;background:#252539;border-color:#34344f}
+    .badge.mrvs{color:#e6c78f;background:#3a3320;border-color:#5c5031}
+    .row-set{
+      font:10px ui-monospace,SFMono-Regular,Consolas,monospace;color:#6f6f88;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;
+    }
     .row-value{
       min-width:0;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;color:#c1c1d6;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
     }
+    .row-value.expandable{cursor:pointer}
+    .row-value.expandable:hover{color:#eaeaf6}
+    .row-value.expanded{white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word}
     .row-value.redacted{color:#ff9d9d;font-style:italic}
     .value-tag{color:#75758c;font-style:italic;margin-left:6px}
     .empty{padding:48px 20px;text-align:center;color:#74748b;font-size:13px}
@@ -135,20 +158,47 @@
   };
 
   const rowSearchText = (row) =>
-    [row.name, row.label, row.type, BUCKET_LABELS[row.bucket] || row.bucket]
+    [row.name, row.label, row.type, row.setName, BUCKET_LABELS[row.bucket] || row.bucket]
       .join(" ")
       .toLowerCase();
+
+  // A row "has a value" when we resolved something real: a live/default value
+  // string, or a redacted secret (there IS a value, we just can't show it).
+  const rowHasValue = (row) => {
+    if (row.valueSource === "redacted") return true;
+    if (row.valueSource === "none") return false;
+    const value = String(row.value == null ? "" : row.value).trim();
+    if (row.isMrvs) return value !== "" && value !== "[]";
+    return value !== "";
+  };
 
   const filteredRows = () => {
     const rows = (lastResult && lastResult.rows) || [];
     return rows.filter((row) => {
-      if (activeFilter !== "all" && row.bucket !== activeFilter) return false;
+      if (activeFilter === "hidden" && !row.hidden) return false;
+      if (activeFilter === "visible" && row.hidden) return false;
+      if (hideEmpty && !rowHasValue(row)) return false;
       return !searchQuery || rowSearchText(row).includes(searchQuery);
     });
   };
 
+  const mrvsRowCount = (raw) => {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.length;
+    } catch (e) {}
+    return null;
+  };
+
   const valueCellText = (row) => {
     if (row.valueSource === "redacted") return "[REDACTED]";
+    if (row.isMrvs) {
+      const raw = row.valueSource === "live" ? row.value : "";
+      if (!raw || raw === "[]") return "(no rows)";
+      const count = mrvsRowCount(raw);
+      const prefix = count == null ? "" : count + (count === 1 ? " row: " : " rows: ");
+      return prefix + raw;
+    }
     if (row.valueSource === "default") return (row.value || "") + " (default, not live)";
     if (row.valueSource === "live") return row.value || "(empty)";
     return "(no value)";
@@ -164,7 +214,7 @@
     if (!rows.length) {
       const empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = "No hidden variables match these filters.";
+      empty.textContent = "No variables match these filters.";
       list.appendChild(empty);
       return;
     }
@@ -183,6 +233,13 @@
       varEl.className = "row-var";
       varEl.textContent = row.name;
       nameCell.append(labelEl, varEl);
+      if (row.setName) {
+        const setEl = document.createElement("div");
+        setEl.className = "row-set";
+        setEl.textContent = "Set: " + row.setName;
+        setEl.title = "Variable set: " + row.setName;
+        nameCell.append(setEl);
+      }
 
       const typeCell = document.createElement("div");
       typeCell.className = "row-type";
@@ -196,7 +253,15 @@
       const valueCell = document.createElement("div");
       valueCell.className = "row-value" + (row.valueSource === "redacted" ? " redacted" : "");
       valueCell.textContent = valueCellText(row);
-      valueCell.title = valueCell.textContent;
+      if (valueCell.textContent.length > 28) {
+        valueCell.classList.add("expandable");
+        valueCell.title = "Click to expand / collapse";
+        valueCell.addEventListener("click", () => {
+          valueCell.classList.toggle("expanded");
+        });
+      } else {
+        valueCell.title = valueCell.textContent;
+      }
 
       el.append(nameCell, typeCell, bucketCell, valueCell);
       list.appendChild(el);
@@ -205,17 +270,19 @@
 
   const resultsAsText = () => {
     const result = lastResult || { rows: [] };
+    const rows = filteredRows();
     const lines = [
-      "SN Dev Helper - Hidden Portal Variables",
+      "SN Dev Helper - Portal Variable Values",
       "Read-only inspector; does not modify the live form.",
-      "Rows: " + String((result.rows || []).length),
+      "Rows: " + String(rows.length) + " of " + String((result.rows || []).length),
       "",
     ];
-    (result.rows || []).forEach((row) => {
+    rows.forEach((row) => {
       lines.push(
         (row.label || row.name) +
           " (" + row.name + ") — " +
           (BUCKET_LABELS[row.bucket] || row.bucket) +
+          (row.setName ? " [" + row.setName + "]" : "") +
           " — " + (row.type || "") +
           " — " + valueCellText(row)
       );
@@ -251,14 +318,13 @@
     }
   };
 
-  const bucketCount = (rows, bucket) => rows.filter((row) => row.bucket === bucket).length;
-
   const showResults = (result) => {
     if (window !== window.top) return;
     closeResults();
     lastResult = result;
     activeFilter = "all";
     searchQuery = "";
+    hideEmpty = false;
 
     const rows = result.rows || [];
 
@@ -266,32 +332,38 @@
     resultsHost.id = "snh-hidden-variables-results";
     document.documentElement.appendChild(resultsHost);
     resultsShadow = resultsHost.attachShadow({ mode: "closed" });
+    const hiddenTotal = rows.filter((row) => row.hidden).length;
+    const setsNote = result.setCount
+      ? result.setCount + (result.setCount === 1 ? " variable set" : " variable sets")
+      : "";
     resultsShadow.innerHTML = `
       <style>${UI_CSS}</style>
       <div class="overlay">
         <section class="panel" role="dialog" aria-modal="true" aria-labelledby="snh-hidden-title">
           <header class="header">
             <div class="heading">
-              <h2 id="snh-hidden-title">Hidden Variables <span class="best-effort">Best effort</span></h2>
-              <div class="subtitle">Variables on this catalog item that are permanently Hidden-type, or currently switched off by a UI Policy/client script.</div>
+              <h2 id="snh-hidden-title">Variable Values <span class="best-effort">Best effort</span></h2>
+              <div class="subtitle">Every variable on this catalog item with its best-effort current value. Hidden = permanently Hidden-type, switched off by a UI Policy/client script, or not rendered.</div>
             </div>
             <button class="close" type="button">Close</button>
           </header>
           <div class="summary">
-            <span><strong data-count="total">0</strong>hidden</span>
-            <span><strong data-count="hidden-type">0</strong>hidden type</span>
-            <span><strong data-count="invisible">0</strong>hidden by policy/script</span>
-            <span><strong data-count="absent">0</strong>not rendered</span>
+            <span><strong data-count="total">0</strong>variables</span>
+            <span><strong data-count="hidden">0</strong>hidden</span>
+            <span><strong data-count="visible">0</strong>visible</span>
+            ${setsNote ? '<span>' + setsNote + "</span>" : ""}
             ${result.foundForm ? "" : '<span class="warning">Could not find the catalog form on this page.</span>'}
           </div>
           <div class="controls">
-            <div class="filters" aria-label="Bucket filters">
+            <div class="filters" aria-label="Visibility filters">
               <button class="filter active" type="button" data-filter="all">All</button>
-              <button class="filter" type="button" data-filter="hidden-type">Hidden type</button>
-              <button class="filter" type="button" data-filter="invisible">Hidden by policy/script</button>
-              <button class="filter" type="button" data-filter="absent">Not rendered</button>
+              <button class="filter" type="button" data-filter="hidden">Hidden</button>
+              <button class="filter" type="button" data-filter="visible">Visible</button>
             </div>
-            <input class="search" type="search" placeholder="Search name or label…" aria-label="Search hidden variables" />
+            <button class="toggle" type="button" data-toggle="nonempty" aria-pressed="false">
+              <span class="dot"></span>Non-empty
+            </button>
+            <input class="search" type="search" placeholder="Search name, label or set…" aria-label="Search variables" />
           </div>
           <div class="rows"></div>
           <footer class="toolbar">
@@ -303,14 +375,13 @@
       </div>
     `;
 
-    const setCount = (key, value) => {
+    const writeCount = (key, value) => {
       const el = resultsShadow.querySelector("[data-count='" + key + "']");
       if (el) el.textContent = String(value);
     };
-    setCount("total", rows.length);
-    setCount("hidden-type", bucketCount(rows, "hidden-type"));
-    setCount("invisible", bucketCount(rows, "invisible"));
-    setCount("absent", bucketCount(rows, "absent"));
+    writeCount("total", rows.length);
+    writeCount("hidden", hiddenTotal);
+    writeCount("visible", rows.length - hiddenTotal);
 
     resultsShadow.querySelectorAll("[data-filter]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -321,6 +392,16 @@
         renderRows();
       });
     });
+
+    const emptyToggle = resultsShadow.querySelector("[data-toggle='nonempty']");
+    if (emptyToggle) {
+      emptyToggle.addEventListener("click", () => {
+        hideEmpty = !hideEmpty;
+        emptyToggle.classList.toggle("active", hideEmpty);
+        emptyToggle.setAttribute("aria-pressed", hideEmpty ? "true" : "false");
+        renderRows();
+      });
+    }
 
     const search = resultsShadow.querySelector(".search");
     if (search) {
