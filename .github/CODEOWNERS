@@ -1,0 +1,6 @@
+# Code owners for SN Dev Helper
+# Every PR into a protected branch requires review from the owners listed here.
+# See: https://docs.github.com/articles/about-code-owners
+
+# Default owner for everything in the repo
+*       @RushiPatel92
