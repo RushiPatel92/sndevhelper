@@ -566,6 +566,19 @@ function isUnsupportedVariableType(type) {
   return normalized && UNSUPPORTED_VARIABLE_TYPES.has(normalized);
 }
 
+// Detects a multi-row variable set from an item_option_new_set record, whose
+// own `type` reads "one_to_many"/"Multiple Rows" rather than the variable-level
+// codes handled by isMultiRowVariableSetType.
+function isMultiRowSetType(typeValue, typeDisplay) {
+  const value = normalizeVariableType(typeValue);
+  const display = normalizeVariableType(typeDisplay);
+  return (
+    value === "one_to_many" ||
+    display.indexOf("multi") >= 0 ||
+    isMultiRowVariableSetType(typeValue)
+  );
+}
+
 // "18" is this instance's observed type code for the Hidden question type;
 // unlike the numeric codes above it isn't documented, so the display string
 // ("hidden") is checked too and takes precedence if the code ever differs.
@@ -1306,13 +1319,51 @@ const VARIABLE_DEFINITION_FIELDS = [
   "default_value",
 ].join(",");
 
+// Resolve each variable set's display name, internal (g_form) name, and whether
+// it is a multi-row variable set. Best-effort: names are cosmetic and MRVS
+// consolidation degrades gracefully to per-column rows if this fails.
+async function fetchVariableSetMeta(setIds) {
+  const meta = new Map();
+  if (!setIds.length) return meta;
+  try {
+    const rows = await snGetMany(
+      "item_option_new_set",
+      "sys_idIN" + setIds.join(","),
+      "sys_id,name,internal_name,title,type",
+      setIds.length,
+      { displayAll: true, excludeRefLinks: true }
+    );
+    rows.forEach((row) => {
+      const id = snFieldValue(row, "sys_id");
+      if (!isSysId(id)) return;
+      const internalName = snFieldValue(row, "internal_name");
+      const title =
+        snFieldDisplay(row, "title") || internalName || snFieldDisplay(row, "name") || "";
+      meta.set(id, {
+        id,
+        internalName,
+        name: snFieldValue(row, "name"),
+        title,
+        isMrvs: isMultiRowSetType(snFieldValue(row, "type"), snFieldDisplay(row, "type")),
+      });
+    });
+  } catch (e) {
+    /* Set metadata is best-effort; membership still resolves without it. */
+  }
+  return meta;
+}
+
 async function fetchCatalogItemVariableDefinitions(catalogItemSysId) {
   const definitions = new Map();
 
-  const addRows = (rows) => {
+  const addRows = (rows, meta, skipMrvsChildren) => {
     rows.forEach((row) => {
       const name = snFieldValue(row, "name").trim();
       if (!name || definitions.has(name)) return;
+      const variableSet = snFieldValue(row, "variable_set");
+      const setInfo = meta && meta.get(variableSet);
+      // MRVS columns are surfaced as a single consolidated parent row instead.
+      if (skipMrvsChildren && setInfo && setInfo.isMrvs) return;
       const type = snFieldValue(row, "type");
       if (isUnsupportedVariableType(type) && !isSecretVariableType(type)) return;
 
@@ -1323,7 +1374,8 @@ async function fetchCatalogItemVariableDefinitions(catalogItemSysId) {
         label,
         type,
         typeDisplay: snFieldDisplay(row, "type") || type,
-        variableSet: snFieldValue(row, "variable_set"),
+        variableSet,
+        setName: (setInfo && setInfo.title) || "",
         referenceTable:
           snFieldValue(row, "reference") ||
           snFieldValue(row, "lookup_table") ||
@@ -1332,6 +1384,7 @@ async function fetchCatalogItemVariableDefinitions(catalogItemSysId) {
         defaultValue: secret ? "" : snFieldValue(row, "default_value"),
         hiddenType: isHiddenVariableType(type),
         questionId: snFieldValue(row, "sys_id"),
+        isMrvs: false,
       });
     });
   };
@@ -1343,7 +1396,7 @@ async function fetchCatalogItemVariableDefinitions(catalogItemSysId) {
     300,
     { displayAll: true, excludeRefLinks: true }
   );
-  addRows(directRows);
+  addRows(directRows, null, false);
 
   const setRows = await snGetMany(
     "io_set_item",
@@ -1357,6 +1410,7 @@ async function fetchCatalogItemVariableDefinitions(catalogItemSysId) {
   );
 
   if (setIds.length) {
+    const meta = await fetchVariableSetMeta(setIds);
     const setVariableRows = await snGetMany(
       "item_option_new",
       "variable_setIN" + setIds.join(","),
@@ -1364,30 +1418,65 @@ async function fetchCatalogItemVariableDefinitions(catalogItemSysId) {
       500,
       { displayAll: true, excludeRefLinks: true }
     );
-    addRows(setVariableRows);
+    addRows(setVariableRows, meta, true);
+
+    // One consolidated row per multi-row variable set, keyed by its internal
+    // name so g_form.getValue(<name>) yields the whole JSON-array value.
+    meta.forEach((info) => {
+      if (!info.isMrvs) return;
+      const key = (info.internalName || info.name || "").trim();
+      if (!key || definitions.has(key)) return;
+      definitions.set(key, {
+        name: key,
+        label: info.title || key,
+        type: "multi_row_variable_set",
+        typeDisplay: "Multi-Row Variable Set",
+        variableSet: info.id,
+        setName: info.title || "",
+        referenceTable: "",
+        secret: false,
+        defaultValue: "",
+        hiddenType: false,
+        questionId: info.id,
+        isMrvs: true,
+      });
+    });
   }
 
-  return Array.from(definitions.values());
+  return { variables: Array.from(definitions.values()), setCount: setIds.length };
 }
 
-function classifyHiddenVariables(definitions, perVariableResults) {
+// Build one row per variable, keeping every variable (visible and hidden).
+// Visibility is a tag, not a filter: a mis-detected element downgrades a row
+// from "visible" to a wrong hidden bucket at worst — it never drops the row.
+function buildVariableRows(definitions, perVariableResults) {
   const resultByName = new Map();
   (perVariableResults || []).forEach((entry) => {
     if (entry && entry.name) resultByName.set(entry.name, entry);
   });
 
-  const rows = [];
-  definitions.forEach((def) => {
+  return definitions.map((def) => {
     const domResult = resultByName.get(def.name) || {};
-    let bucket = null;
-    if (def.hiddenType) {
+    let bucket;
+    let hidden;
+    if (def.isMrvs) {
+      // A multi-row set renders as a grid, not a single field, so DOM/gForm
+      // visibility can't classify it — give it its own bucket, not "hidden".
+      bucket = "mrvs";
+      hidden = false;
+    } else if (def.hiddenType) {
       bucket = "hidden-type";
+      hidden = true;
     } else if (domResult.foundEl && domResult.visible === false) {
       bucket = "invisible";
+      hidden = true;
     } else if (!domResult.foundEl) {
       bucket = "absent";
+      hidden = true;
+    } else {
+      bucket = "visible";
+      hidden = false;
     }
-    if (!bucket) return; // present and visible: not hidden, don't report it
 
     let value = "";
     let valueSource = "none";
@@ -1402,19 +1491,21 @@ function classifyHiddenVariables(definitions, perVariableResults) {
       valueSource = "default";
     }
 
-    rows.push({
+    return {
       name: def.name,
       label: def.label,
       type: def.typeDisplay,
+      setName: def.setName || "",
+      isMrvs: Boolean(def.isMrvs),
       bucket,
+      hidden,
       secret: def.secret,
       value,
       valueSource,
       gFormReportedVisible:
         domResult.gFormReportedVisible == null ? null : domResult.gFormReportedVisible,
-    });
+    };
   });
-  return rows;
 }
 
 async function showHiddenPortalVariables() {
@@ -1426,7 +1517,9 @@ async function showHiddenPortalVariables() {
 
   showToast("Reading variable definitions...", false, 6000);
   try {
-    const definitions = await fetchCatalogItemVariableDefinitions(catalogItemSysId);
+    const { variables: definitions, setCount } = await fetchCatalogItemVariableDefinitions(
+      catalogItemSysId
+    );
     if (!definitions.length) {
       showToast("No variables found on this catalog item", true);
       return;
@@ -1446,13 +1539,12 @@ async function showHiddenPortalVariables() {
       return;
     }
 
-    const rows = classifyHiddenVariables(definitions, resp.perVariable);
-    if (!rows.length) {
-      showToast("No hidden variables found");
-      return;
-    }
-
-    globalThis.SNHiddenVariablesUI.showResults({ foundForm: resp.foundForm, rows });
+    const rows = buildVariableRows(definitions, resp.perVariable);
+    globalThis.SNHiddenVariablesUI.showResults({
+      foundForm: resp.foundForm,
+      setCount,
+      rows,
+    });
     closePalette();
   } catch (error) {
     showToast(String(error && error.message ? error.message : error), true);
@@ -1814,9 +1906,9 @@ function buildCommands() {
       run: copyPortalVariableDebugInfo,
     },
     {
-      id: "show-hidden-variables",
-      name: "Show hidden variables",
-      keywords: ["hidden", "variable", "catalog", "ui policy", "client script", "variable set", "sc_cat_item"],
+      id: "show-variable-values",
+      name: "Show variable values",
+      keywords: ["variable", "value", "values", "form", "hidden", "catalog", "ui policy", "client script", "variable set", "sc_cat_item"],
       group: "Catalog",
       keepOpen: true,
       run: showHiddenPortalVariables,
