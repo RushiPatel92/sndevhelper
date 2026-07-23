@@ -85,6 +85,10 @@ Click the puzzle-piece **Extensions** icon in the toolbar, then the pin next to
    (↻) icon on the SN Dev Helper card.
 3. Refresh any open ServiceNow tab so the updated content script loads.
 
+The version shown on the extension card matches the one in
+[`manifest.json`](manifest.json); [CHANGELOG.md](CHANGELOG.md) lists what
+changed in each release.
+
 ### Troubleshooting
 
 - **"Manifest file is missing or unreadable"** — you pointed the browser at the
