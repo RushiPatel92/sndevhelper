@@ -297,7 +297,10 @@ function toggleFieldNames(force) {
   SNH.fieldNamesOn = turnOn;
 
   removeSnhElements(".snh-fieldname");
-  if (!turnOn) return 0;
+  if (!turnOn) {
+    syncToggleObserver();
+    return 0;
+  }
 
   let count = 0;
   getClassicFields().forEach(({ field, target }) => {
@@ -309,6 +312,7 @@ function toggleFieldNames(force) {
     appendFieldBadge(target, field, "snh-workspace-fieldname");
     count++;
   });
+  syncToggleObserver();
   return count;
 }
 
@@ -1701,7 +1705,10 @@ function toggleTranslationIcons(force) {
   SNH.transIconsOn = turnOn;
 
   removeSnhElements(".snh-trans-icon");
-  if (!turnOn) return 0;
+  if (!turnOn) {
+    syncToggleObserver();
+    return 0;
+  }
 
   let count = 0;
   const appendIcons = ({ table, field, target }) => {
@@ -1727,7 +1734,122 @@ function toggleTranslationIcons(force) {
 
   getClassicFields().forEach(appendIcons);
   getWorkspaceFields().forEach(appendIcons);
+  syncToggleObserver();
   return count;
+}
+
+/* =====================================================================
+ * TOGGLE PERSISTENCE
+ *
+ * Classic forms re-render on section switches, related-list refreshes and
+ * UI Policy runs, which throws away our badges and icons. A MutationObserver
+ * puts them back. Three things keep that from becoming a loop or a tax on
+ * every keystroke:
+ *
+ *  1. Re-applying a toggle MUTATES the DOM, so the observer would see its own
+ *     writes and re-fire forever. We disconnect around the re-apply;
+ *     disconnect() also empties the pending record queue, so nothing our own
+ *     writes produced survives to the next observe().
+ *  2. A re-render arrives as a burst of mutations, not one, so the re-apply is
+ *     debounced on the trailing edge.
+ *  3. Both toggles are a full teardown + rescan (see toggleFieldNames), which
+ *     is far too heavy to run per burst. We first ask a cheap question — is any
+ *     classic label missing its decoration? — and bail when the answer is no.
+ *
+ * CLASSIC UI ONLY. getWorkspaceFields() walks every element in every shadow
+ * root; running that against a Workspace SPA's mutation volume would cost more
+ * than the feature is worth. Workspace forms still decorate on demand, they
+ * just don't survive a re-render yet.
+ * ===================================================================== */
+
+const SNH_REAPPLY_DEBOUNCE_MS = 200;
+let snhToggleObserver = null;
+let snhReapplyTimer = null;
+
+function anyToggleOn() {
+  return SNH.fieldNamesOn || SNH.transIconsOn;
+}
+
+/*
+ * Cheap staleness check. Deliberately driven by getClassicFields() rather than
+ * raw label counts: it returns exactly the set the toggles decorate, so "every
+ * field has its decoration" is reachable. Comparing counts instead would let a
+ * label the parser skips — or a badge added by the workspace pass — wedge this
+ * permanently stale and rebuild on a 200ms loop forever.
+ */
+function classicDecorationStale() {
+  const fields = getClassicFields();
+  if (!fields.length) return false;
+  return fields.some(
+    ({ target }) =>
+      (SNH.fieldNamesOn && !target.querySelector(":scope > .snh-fieldname")) ||
+      (SNH.transIconsOn && !target.querySelector(":scope > .snh-trans-icon"))
+  );
+}
+
+function reapplyToggles() {
+  // Honour both flags: a re-render wipes whatever was on, so restore all of it.
+  if (SNH.fieldNamesOn) toggleFieldNames(true);
+  if (SNH.transIconsOn) toggleTranslationIcons(true);
+}
+
+function runQueuedReapply() {
+  snhReapplyTimer = null;
+  if (!snhToggleObserver || !anyToggleOn()) return;
+  if (!classicDecorationStale()) return;
+
+  snhToggleObserver.disconnect();
+  try {
+    reapplyToggles();
+  } finally {
+    // Re-arm even if a rebuild threw, otherwise one bad form kills the feature
+    // for the rest of the page's life.
+    observeForReapply();
+  }
+}
+
+function queueReapply() {
+  if (snhReapplyTimer) clearTimeout(snhReapplyTimer);
+  snhReapplyTimer = setTimeout(runQueuedReapply, SNH_REAPPLY_DEBOUNCE_MS);
+}
+
+function observeForReapply() {
+  // childList + subtree only. Attribute and character-data records would
+  // multiply the volume without telling us anything the staleness check
+  // doesn't already answer.
+  snhToggleObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+}
+
+/*
+ * Called from both toggles, on the on AND off paths. Starts the observer lazily
+ * so instance pages with no toggle in use never pay for one, and tears it down
+ * once the last toggle goes off.
+ */
+function syncToggleObserver() {
+  const shouldRun = anyToggleOn() && getClassicFields().length > 0;
+
+  if (!shouldRun) {
+    if (snhReapplyTimer) {
+      clearTimeout(snhReapplyTimer);
+      snhReapplyTimer = null;
+    }
+    if (snhToggleObserver) {
+      snhToggleObserver.disconnect();
+      snhToggleObserver = null;
+    }
+    return;
+  }
+
+  // Already running — including the re-entrant call from reapplyToggles(),
+  // where we are mid-rebuild with the observer deliberately disconnected and
+  // runQueuedReapply() owns re-arming it.
+  if (snhToggleObserver) return;
+
+  snhToggleObserver = new MutationObserver(queueReapply);
+  observeForReapply();
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

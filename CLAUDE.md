@@ -92,10 +92,15 @@ the caller falls back gracefully.
 - Do NOT create a top-level file or folder whose name starts with `_` — Chrome
   reserves those and will refuse to load the extension. (`CLAUDE.md`, `.claude/`,
   `.git/` are fine; Chrome ignores them.)
-- Toggles are manual and don't re-apply after a form re-renders. A
-  `MutationObserver` is the planned fix.
+- Toggles re-apply themselves after a classic form re-renders, via a
+  `MutationObserver` in `content.js` (see the TOGGLE PERSISTENCE block). Adding
+  work there means respecting three things: the re-apply mutates the DOM, so it
+  runs with the observer disconnected or it loops; re-renders arrive as bursts,
+  so it is debounced; and both toggles are full teardown + rescan, so a cheap
+  staleness check gates the rebuild. Workspace forms are deliberately excluded —
+  `getWorkspaceFields()` walks every element in every shadow root.
 
 ## Roadmap
 Background Script runner, update set switcher, impersonation, Table API record
-search, GlideRecord snippet generator, per-environment favicon badge, and a
-`MutationObserver` so toggles survive partial form reloads.
+search, GlideRecord snippet generator, per-environment favicon badge, and
+toggle persistence for Workspace forms.
