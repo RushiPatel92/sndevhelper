@@ -20,6 +20,7 @@ SHIP=(
   debug_timeline_main.js
   debug_timeline_ui.js
   hidden_variables_ui.js
+  catalog_insight_ui.js
   popup.html
   popup.js
   popup.css

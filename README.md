@@ -143,6 +143,7 @@ and `Esc` to close. Some commands accept an argument in an inline input field.
 | --- | --- |
 | Prefill variables from ticket… | Enter a RITM/SCTASK/REQ/task number (or submitted-record sys_id) to prefill portal catalog variables from that ticket. |
 | Show variable values | Read-only panel listing every variable on the current Service Portal catalog item with its best-effort value, including variable-set variables. Filter by hidden/visible; hidden covers Hidden-type, UI Policy/client-script, and not-rendered variables. |
+| What affects this catalog item | Read-only panel listing the catalog client scripts and catalog UI policies bound to the current item or its variable sets — type (onLoad/onChange/…), watched variable, active state, and which views they run on. Click a row to open the record. Nothing here runs or edits the logic. |
 | Copy portal variable debug info | Copy diagnostic details about the current portal record's variables/fields. |
 
 **Navigate**

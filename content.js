@@ -1555,6 +1555,172 @@ async function showHiddenPortalVariables() {
   }
 }
 
+/* =====================================================================
+ * "What affects this catalog item"
+ *
+ * Read-only sibling of showHiddenPortalVariables: lists the catalog client
+ * scripts (catalog_script_client) and catalog UI policies (catalog_ui_policy)
+ * bound to the current item or any variable set attached to it. All reads are
+ * same-origin authenticated GETs via snGetMany — no new permissions, and a
+ * token-enforced GET degrades to a toast like every other Table API caller.
+ *
+ * Field-name asymmetry to remember: the item link is `cat_item` on
+ * catalog_script_client but `catalog_item` on catalog_ui_policy.
+ * ===================================================================== */
+
+const CATALOG_CLIENT_FIELDS = [
+  "sys_id", "name", "type", "variable", "cat_item", "variable_set",
+  "active", "order", "applies_catalog", "applies_sc_task", "applies_req_item",
+].join(",");
+
+const CATALOG_UIP_FIELDS = [
+  "sys_id", "short_description", "catalog_item", "variable_set",
+  "active", "order", "on_load", "reverse_if_false", "catalog_conditions",
+  "applies_catalog", "applies_sc_task", "applies_req_item",
+].join(",");
+
+function snBool(row, field) {
+  const v = snFieldValue(row, field).trim().toLowerCase();
+  return v === "true" || v === "1";
+}
+
+function catalogViewFlags(row) {
+  return {
+    catalog: snBool(row, "applies_catalog"),
+    task: snBool(row, "applies_sc_task"),
+    ritm: snBool(row, "applies_req_item"),
+  };
+}
+
+// Where a script/policy is attached: this item, or a named variable set.
+function catalogBoundTo(row, itemField, itemSysId, setNames) {
+  const setId = snFieldValue(row, "variable_set");
+  if (isSysId(setId)) {
+    return "Variable set: " + (setNames.get(setId) || "(set " + setId.slice(0, 8) + "…)");
+  }
+  const itemId = snFieldValue(row, itemField);
+  if (isSysId(itemId) && itemId === itemSysId) return "This item";
+  if (isSysId(itemId)) return "Another catalog item";
+  return "This item";
+}
+
+async function fetchCatalogAffectingLogic(catalogItemSysId) {
+  // Variable sets attached to the item (same source the values panel uses).
+  const setRows = await snGetMany(
+    "io_set_item",
+    "sc_cat_item=" + catalogItemSysId,
+    "variable_set,order",
+    100,
+    { displayAll: true, excludeRefLinks: true }
+  );
+  const setIds = Array.from(
+    new Set(setRows.map((row) => snFieldValue(row, "variable_set")).filter(isSysId))
+  );
+  const setNames = new Map();
+  if (setIds.length) {
+    const meta = await fetchVariableSetMeta(setIds);
+    meta.forEach((info, id) => setNames.set(id, info.title || ""));
+  }
+
+  const setClause = setIds.length ? "^ORvariable_setIN" + setIds.join(",") : "";
+  const clientRows = await snGetMany(
+    "catalog_script_client",
+    "cat_item=" + catalogItemSysId + setClause,
+    CATALOG_CLIENT_FIELDS,
+    200,
+    { displayAll: true, excludeRefLinks: true }
+  );
+  const uipRows = await snGetMany(
+    "catalog_ui_policy",
+    "catalog_item=" + catalogItemSysId + setClause,
+    CATALOG_UIP_FIELDS,
+    200,
+    { displayAll: true, excludeRefLinks: true }
+  );
+
+  const rows = [];
+
+  clientRows.forEach((row) => {
+    const order = parseVariableOrder(snFieldValue(row, "order"));
+    rows.push({
+      kind: "client",
+      id: snFieldValue(row, "sys_id"),
+      name: snFieldDisplay(row, "name"),
+      subtype: snFieldDisplay(row, "type"),
+      variable: snFieldValue(row, "variable"),
+      boundTo: catalogBoundTo(row, "cat_item", catalogItemSysId, setNames),
+      active: snBool(row, "active"),
+      views: catalogViewFlags(row),
+      order: order.value,
+      orderKnown: order.known,
+      conditions: "",
+    });
+  });
+
+  uipRows.forEach((row) => {
+    const order = parseVariableOrder(snFieldValue(row, "order"));
+    const extras = [];
+    if (snBool(row, "on_load")) extras.push("on load");
+    if (snBool(row, "reverse_if_false")) extras.push("reverses");
+    rows.push({
+      kind: "uip",
+      id: snFieldValue(row, "sys_id"),
+      name: snFieldDisplay(row, "short_description"),
+      subtype: extras.join(" · "),
+      variable: "",
+      boundTo: catalogBoundTo(row, "catalog_item", catalogItemSysId, setNames),
+      active: snBool(row, "active"),
+      views: catalogViewFlags(row),
+      order: order.value,
+      orderKnown: order.known,
+      conditions: snFieldValue(row, "catalog_conditions"),
+    });
+  });
+
+  // Item-bound before set-bound, then by order, then name.
+  const boundRank = (r) => (r.boundTo === "This item" ? 0 : 1);
+  rows.sort(
+    (a, b) =>
+      a.kind.localeCompare(b.kind) ||
+      boundRank(a) - boundRank(b) ||
+      (a.order || 0) - (b.order || 0) ||
+      String(a.name).localeCompare(String(b.name))
+  );
+
+  return { rows, setCount: setIds.length };
+}
+
+async function showCatalogInsight() {
+  const catalogItemSysId = currentCatalogItemDefinitionSysId();
+  if (!isSysId(catalogItemSysId)) {
+    showToast("Open a Service Portal catalog item first", true);
+    return;
+  }
+
+  showToast("Reading catalog client scripts and UI policies...", false, 6000);
+  try {
+    const { rows, setCount } = await fetchCatalogAffectingLogic(catalogItemSysId);
+    let itemName = "";
+    try {
+      const itemRows = await snGetMany(
+        "sc_cat_item",
+        "sys_id=" + catalogItemSysId,
+        "name",
+        1,
+        { displayAll: true, excludeRefLinks: true }
+      );
+      if (itemRows.length) itemName = snFieldDisplay(itemRows[0], "name");
+    } catch (e) {
+      /* name is cosmetic; ignore */
+    }
+
+    globalThis.SNCatalogInsightUI.showResults({ rows, setCount, itemName });
+    closePalette();
+  } catch (error) {
+    showToast(String(error && error.message ? error.message : error), true);
+  }
+}
+
 // Walk up the table hierarchy to find where the field's dictionary entry lives.
 async function resolveDefiningTable(startTable, field) {
   let table = startTable;
@@ -2039,6 +2205,14 @@ function buildCommands() {
       group: "Catalog",
       keepOpen: true,
       run: showHiddenPortalVariables,
+    },
+    {
+      id: "catalog-affecting-logic",
+      name: "What affects this catalog item",
+      keywords: ["catalog", "client script", "ui policy", "onchange", "onload", "onsubmit", "affects", "debug", "logic", "catalog_script_client", "catalog_ui_policy"],
+      group: "Catalog",
+      keepOpen: true,
+      run: showCatalogInsight,
     },
     {
       id: "open-table-list",

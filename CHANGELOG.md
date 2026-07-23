@@ -9,6 +9,17 @@ Dates are `YYYY-MM-DD` (Europe/London). Releases before 0.4.0 were not tagged
 individually, so 0.3.0 is recorded as a single baseline rather than
 reconstructed version by version.
 
+## [0.5.0] - 2026-07-23
+
+### Added
+- **"What affects this catalog item"** command. A read-only panel listing the
+  catalog client scripts (`catalog_script_client`) and catalog UI policies
+  (`catalog_ui_policy`) bound to the current Service Portal item or its variable
+  sets — script type, watched variable, active state, and which views they run
+  on — each row a click-through to the platform record. All reads are
+  same-origin Table API GETs; script bodies are never shown, so no new
+  permissions and nothing to redact.
+
 ## [0.4.0] - 2026-07-23
 
 ### Added
@@ -51,4 +62,5 @@ The feature set as of the first recorded version:
   values (incl. hidden and variable-set variables), copy variable debug info.
 - Record tools: copy sys_id, open playbook executions, open customer updates.
 
+[0.5.0]: https://github.com/RushiPatel92/sndevhelper/releases/tag/v0.5.0
 [0.4.0]: https://github.com/RushiPatel92/sndevhelper/releases/tag/v0.4.0
