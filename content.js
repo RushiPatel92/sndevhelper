@@ -1803,8 +1803,13 @@ function runQueuedReapply() {
     reapplyToggles();
   } finally {
     // Re-arm even if a rebuild threw, otherwise one bad form kills the feature
-    // for the rest of the page's life.
-    observeForReapply();
+    // for the rest of the page's life. Null-guarded because this runs in a
+    // finally: reapplyToggles() re-enters syncToggleObserver(), which tears the
+    // observer down when it sees no classic fields. That can't happen today
+    // (the rebuild is synchronous, so the DOM can't change under it after the
+    // staleness check found fields), but a finally is the wrong place to
+    // discover it if that ever stops being true.
+    if (snhToggleObserver) observeForReapply();
   }
 }
 
