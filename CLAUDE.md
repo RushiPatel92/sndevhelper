@@ -47,6 +47,8 @@ the caller falls back gracefully.
   dictionary-inheritance resolution, Table API helper (`snGet`).
 - `debug_timeline_ui.js` - isolated-world recording indicator and filterable
   Debug Timeline results panel.
+- `catalog_insight_ui.js` - isolated-world panel for "What affects this catalog
+  item" (catalog client scripts + UI policies). Loaded before `content.js`.
 - `debug_timeline_main.js` - MAIN-world Debug Timeline recorder imported by
   the service worker and injected into every frame on demand.
 - `popup.js` / `popup.html` / `popup.css` — popup UI: instance info, quick table

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SN Dev Helper",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Developer utilities for ServiceNow: instance info, quick table nav, dev shortcuts, copy sys_id, technical field names.",
   "permissions": ["activeTab", "scripting", "storage", "clipboardWrite"],
   "host_permissions": ["https://*.service-now.com/*"],
@@ -27,7 +27,7 @@
   "content_scripts": [
     {
       "matches": ["https://*.service-now.com/*"],
-      "js": ["debug_timeline_ui.js", "hidden_variables_ui.js", "content.js"],
+      "js": ["debug_timeline_ui.js", "hidden_variables_ui.js", "catalog_insight_ui.js", "content.js"],
       "all_frames": true,
       "run_at": "document_idle"
     }
