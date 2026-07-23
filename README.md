@@ -91,8 +91,9 @@ Click the puzzle-piece **Extensions** icon in the toolbar, then the pin next to
   wrong folder. Select the folder that directly contains `manifest.json`.
 - **Icon/popup does nothing on a page** — the extension only activates on
   `*.service-now.com` URLs. Open a ServiceNow instance first.
-- **Toggles or badges disappeared after the form changed** — toggles are manual
-  and don't re-apply after a form re-renders; run the toggle again.
+- **Toggles or badges disappeared after the form changed** — on classic forms
+  they re-apply themselves within a moment. On Workspace forms they don't yet;
+  run the toggle again.
 
 ---
 
