@@ -1,0 +1,7 @@
+# core.autocrlf=true would hand a fresh Windows clone a CRLF working copy, and
+# CRLF in a shell script breaks it ("$'\r': command not found"). Keep LF.
+*.sh text eol=lf
+
+# Never line-ending-mangle the extension icons.
+*.png binary
+*.svg text eol=lf
