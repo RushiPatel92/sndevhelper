@@ -1,0 +1,8 @@
+# Build output from package.sh
+sn-dev-helper.zip
+*.zip
+
+# Claude Code's local memory store — machine-local notes, not project source
+memory/
+
+.DS_Store

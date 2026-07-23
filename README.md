@@ -160,7 +160,10 @@ Explorer, and Flow Designer.
 - Load unpacked as above; after editing, click **reload** on the extension card,
   and refresh the ServiceNow tab for content-script changes.
 - Package for the Chrome Web Store: `bash package.sh` (produces a clean zip with
-  only the files Chrome needs).
+  only the files Chrome needs). The script ships an explicit allowlist and then
+  verifies every file `manifest.json` references made it in, so adding an asset
+  to the manifest without adding it to the script's `SHIP` list fails the build
+  instead of producing a zip that breaks on load.
 
 See [CLAUDE.md](CLAUDE.md) for architecture notes (the two JS worlds, frames,
 and message flow).
