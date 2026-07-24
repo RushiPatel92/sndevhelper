@@ -28,7 +28,11 @@
 
   const UI_CSS = `
     *{box-sizing:border-box}
-    :host{all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    :host{
+      all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      /* Teal = selection/focus; pink = primary action. Recording dot stays red. */
+      --teal:#31d4c4;--pink:#ff6fae;
+    }
     button,input{font:inherit}
     .recording{
       position:fixed;top:18px;right:18px;z-index:2147483646;
@@ -88,7 +92,10 @@
     }
     .filters{display:flex;gap:6px;flex-wrap:wrap}
     .filter{padding:5px 9px;font-size:11px;color:#9898b2}
-    .filter.active{background:#373766;border-color:#6262a1;color:#fff}
+    .filter.active{
+      background:color-mix(in srgb, var(--teal) 16%, #292941);
+      border-color:color-mix(in srgb, var(--teal) 55%, #3a3a5c);color:#eafffb;
+    }
     .filter.low-signal-toggle{color:#85859a;border-color:#343449;background:#242437}
     .filter.low-signal-toggle.active{color:#b8b8cb;border-color:#4b4b65;background:#303047}
     .search{
@@ -96,7 +103,7 @@
       border:1px solid #353553;border-radius:6px;color:#e5e5f4;
       outline:none;padding:7px 9px;font-size:12px;
     }
-    .search:focus{border-color:#6767aa}
+    .search:focus{border-color:var(--teal)}
     .search::placeholder{color:#64647b}
     .events{flex:1;overflow:auto;padding:6px 0}
     .event{border-bottom:1px solid #292941}
@@ -148,8 +155,11 @@
     }
     .toolbar-note{font-size:11px;color:#67677e;flex:1}
     .toolbar button{font-size:12px}
-    .toolbar .primary{background:#4b4b91;border-color:#6565b5;color:#fff}
-    .toolbar .primary:hover{background:#5959a5}
+    .toolbar .primary{
+      background:color-mix(in srgb, var(--pink) 82%, #3a2740);
+      border-color:color-mix(in srgb, var(--pink) 70%, #5a3a4c);color:#fff;
+    }
+    .toolbar .primary:hover{background:color-mix(in srgb, var(--pink) 92%, #3a2740)}
     @media(max-width:640px){
       .overlay{padding:8px}.panel{width:100%;height:calc(100vh - 16px)}
       .header{padding:14px}.summary{padding:9px 14px;gap:10px;flex-wrap:wrap}

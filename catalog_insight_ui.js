@@ -24,7 +24,11 @@
 
   const UI_CSS = `
     *{box-sizing:border-box}
-    :host{all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    :host{
+      all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      /* Teal = grouping/selection/focus/links; pink = primary action. */
+      --teal:#31d4c4;--pink:#ff6fae;--band:#2a2a46;
+    }
     button,input{font:inherit}
     .overlay{
       position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.52);
@@ -71,35 +75,47 @@
       border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;
     }
     .filter:hover{background:#343453;color:#fff}
-    .filter.active{background:#373766;border-color:#6262a1;color:#fff}
+    .filter.active{
+      background:color-mix(in srgb, var(--teal) 16%, #292941);
+      border-color:color-mix(in srgb, var(--teal) 55%, #3a3a5c);color:#eafffb;
+    }
     .toggle{
       border:1px solid #3a3a5c;background:#292941;color:#9898b2;
       border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;
       display:inline-flex;align-items:center;gap:6px;
     }
     .toggle:hover{background:#343453;color:#fff}
-    .toggle.active{background:#2a3d33;border-color:#3d6b52;color:#bfe6ce}
+    .toggle.active{
+      background:color-mix(in srgb, var(--teal) 14%, #292941);
+      border-color:color-mix(in srgb, var(--teal) 50%, #3a3a5c);color:#cdfff7;
+    }
     .toggle .dot{width:7px;height:7px;border-radius:50%;background:#55556f}
-    .toggle.active .dot{background:#5fcf90}
+    .toggle.active .dot{background:var(--teal)}
     .search{
       margin-left:auto;width:230px;max-width:38vw;background:#151522;
       border:1px solid #353553;border-radius:6px;color:#e5e5f4;
       outline:none;padding:7px 9px;font-size:12px;
     }
-    .search:focus{border-color:#6767aa}
+    .search:focus{border-color:var(--teal)}
     .search::placeholder{color:#64647b}
     .rows{flex:1;overflow:auto;padding:6px 0}
     .group{border-bottom:1px solid #23233a}
     .group-head{
       display:flex;align-items:center;gap:9px;padding:9px 16px;cursor:pointer;
-      background:#202034;position:sticky;top:0;z-index:1;user-select:none;
+      background:linear-gradient(90deg, color-mix(in srgb, var(--teal) 20%, var(--band)), var(--band) 48%);
+      box-shadow:inset 3px 0 0 var(--teal);
+      border-top:1px solid color-mix(in srgb, var(--teal) 26%, #262640);
+      position:sticky;top:0;z-index:1;user-select:none;
     }
-    .group-head:hover{background:#26263e}
-    .group-caret{color:#8686a6;font-size:10px;width:10px;flex:none}
+    .group-head:hover{filter:brightness(1.08)}
+    .group-caret{color:color-mix(in srgb, var(--teal) 55%, #9a9ab4);font-size:10px;width:10px;flex:none}
     .group-name{
-      font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:#dcdcf2;
-      font-weight:600;white-space:nowrap;flex:none;
+      font:12px ui-monospace,SFMono-Regular,Consolas,monospace;font-weight:600;
+      color:color-mix(in srgb, var(--teal) 82%, white);white-space:nowrap;flex:none;
     }
+    /* The onLoad/onSubmit/UI-policy bucket recedes on purpose. */
+    .group.none{--teal:#6f6f90}
+    .group.none .group-name{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     .group-label{
       font-size:11px;color:#8585a0;min-width:0;cursor:pointer;
       overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -107,8 +123,10 @@
     .group-label.expanded{white-space:normal;overflow:visible;color:#b6b6d0}
     .group-label:hover{color:#c9c9e8}
     .group-count{
-      margin-left:auto;flex:none;background:#33334f;color:#c8c8e2;
-      border-radius:10px;padding:1px 9px;font-size:11px;
+      margin-left:auto;flex:none;border-radius:10px;padding:1px 9px;font-size:11px;font-weight:600;
+      background:color-mix(in srgb, var(--teal) 26%, var(--band));
+      color:color-mix(in srgb, var(--teal) 55%, white);
+      border:1px solid color-mix(in srgb, var(--teal) 34%, transparent);
     }
     .group-rows .row{padding-left:30px}
     .row{
@@ -125,7 +143,7 @@
       display:flex;align-items:center;gap:7px;
     }
     .open-hint{color:#6f6f88;font-size:10px;flex:none}
-    .row:hover .open-hint{color:#a9a9ff}
+    .row:hover .open-hint{color:color-mix(in srgb, var(--teal) 78%, white)}
     .row-bound{
       font:11px ui-monospace,SFMono-Regular,Consolas,monospace;color:#85859f;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;
@@ -165,8 +183,23 @@
     .toolbar button:hover{background:#343453;color:#fff}
     .toolbar button:disabled{opacity:.4;cursor:not-allowed}
     .toolbar button:disabled:hover{background:#292941;color:#d8d8ea}
-    .toolbar .primary{background:#4b4b91;border-color:#6565b5;color:#fff}
-    .toolbar .primary:hover{background:#5959a5}
+    /* "In platform ↗" — secondary navigation: teal outline that still pops. */
+    .toolbar button[data-action='open-scripts'],
+    .toolbar button[data-action='open-policies']{
+      background:color-mix(in srgb, var(--teal) 12%, transparent);
+      border-color:color-mix(in srgb, var(--teal) 52%, #3a3a5c);
+      color:color-mix(in srgb, var(--teal) 84%, white);
+    }
+    .toolbar button[data-action='open-scripts']:hover,
+    .toolbar button[data-action='open-policies']:hover{
+      background:color-mix(in srgb, var(--teal) 20%, transparent);color:#fff;
+    }
+    /* Primary action = the one pink button. */
+    .toolbar .primary{
+      background:color-mix(in srgb, var(--pink) 82%, #3a2740);
+      border-color:color-mix(in srgb, var(--pink) 70%, #5a3a4c);color:#fff;
+    }
+    .toolbar .primary:hover{background:color-mix(in srgb, var(--pink) 92%, #3a2740)}
     @media(max-width:640px){
       .overlay{padding:8px}.panel{width:100%;height:calc(100vh - 16px)}
       .header{padding:14px}.summary{padding:9px 14px;gap:10px;flex-wrap:wrap}
@@ -393,7 +426,7 @@
       const collapsed = collapsedGroups.has(key);
 
       const group = document.createElement("div");
-      group.className = "group";
+      group.className = "group" + (isNone ? " none" : "");
 
       const head = document.createElement("div");
       head.className = "group-head" + (collapsed ? " collapsed" : "");

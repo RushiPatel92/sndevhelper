@@ -4,8 +4,12 @@
   --line: #34373f;
   --text: #e7e9ee;
   --muted: #9aa0ab;
-  --accent: #62d28f;
-  --accent-d: #2f9e63;
+  /* Teal = interactive accent, pink = brand mark, green kept for connected/success. */
+  --teal: #31d4c4;
+  --pink: #ff6fae;
+  --ok: #62d28f;
+  --accent: var(--teal);
+  --accent-d: #1f9c92;
 }
 * { box-sizing: border-box; }
 body {
@@ -27,14 +31,14 @@ header {
   place-items: center;
   width: 22px; height: 22px;
   border-radius: 5px;
-  background: var(--accent-d);
-  color: #04130a;
+  background: var(--pink);
+  color: #2a0713;
   font-weight: 800;
   font-size: 11px;
 }
 .title { font-weight: 700; }
 .status { margin-left: auto; font-size: 11px; color: var(--muted); }
-.status.ok  { color: var(--accent); }
+.status.ok  { color: var(--ok); }
 .status.bad { color: #ff8b8b; }
 
 .card {
@@ -72,4 +76,4 @@ header {
 }
 
 footer { min-height: 18px; padding: 0 12px 10px; }
-#toast { color: var(--accent); font-size: 12px; }
+#toast { color: var(--ok); font-size: 12px; }
