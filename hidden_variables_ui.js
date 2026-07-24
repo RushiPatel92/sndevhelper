@@ -73,33 +73,34 @@
     }
     .filters{display:flex;gap:6px;flex-wrap:wrap}
     .filter{
-      border:1px solid #3a3a5c;background:#292941;color:#9898b2;
+      border:1px solid #68689a;background:#3f4067;color:#e6e6f5;
       border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;
     }
-    .filter:hover{background:#343453;color:#fff}
+    .filter:hover{background:#4a4b78;color:#fff}
     .filter.active{
-      background:color-mix(in srgb, var(--teal) 16%, #292941);
-      border-color:color-mix(in srgb, var(--teal) 55%, #3a3a5c);color:#eafffb;
+      background:color-mix(in srgb, var(--teal) 30%, #23303a);
+      border-color:var(--teal);color:#eafffb;
+      box-shadow:0 0 0 1px color-mix(in srgb, var(--teal) 40%, transparent);
     }
     .toggle{
-      border:1px solid #3a3a5c;background:#292941;color:#9898b2;
+      border:1px solid #68689a;background:#3f4067;color:#e6e6f5;
       border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;
       display:inline-flex;align-items:center;gap:6px;
     }
-    .toggle:hover{background:#343453;color:#fff}
+    .toggle:hover{background:#4a4b78;color:#fff}
     .toggle.active{
-      background:color-mix(in srgb, var(--teal) 14%, #292941);
-      border-color:color-mix(in srgb, var(--teal) 50%, #3a3a5c);color:#cdfff7;
+      background:color-mix(in srgb, var(--teal) 28%, #23303a);
+      border-color:var(--teal);color:#eafffb;
     }
     .toggle .dot{width:7px;height:7px;border-radius:50%;background:#55556f}
     .toggle.active .dot{background:var(--teal)}
     .search{
-      margin-left:auto;width:230px;max-width:38vw;background:#151522;
-      border:1px solid #353553;border-radius:6px;color:#e5e5f4;
+      margin-left:auto;width:230px;max-width:38vw;background:#313150;
+      border:1px solid #575780;border-radius:6px;color:#f0f0fa;
       outline:none;padding:7px 9px;font-size:12px;
     }
-    .search:focus{border-color:var(--teal)}
-    .search::placeholder{color:#64647b}
+    .search:focus{border-color:var(--teal);background:#37375a}
+    .search::placeholder{color:#a4a4be}
     .rows{flex:1;overflow:auto;padding:6px 0}
     .row{
       display:grid;grid-template-columns:1fr 130px 140px 1fr;gap:12px;
