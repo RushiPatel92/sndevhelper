@@ -1638,16 +1638,43 @@ async function fetchCatalogAffectingLogic(catalogItemSysId) {
     { displayAll: true, excludeRefLinks: true }
   );
 
+  // Resolve the onChange-watched variable sys_ids to a developer-facing name
+  // (and its question label). The `variable` field is a reference to
+  // item_option_new, so raw is a sys_id; ungrouped it reads as noise.
+  const variableIds = Array.from(
+    new Set(clientRows.map((row) => snFieldValue(row, "variable")).filter(isSysId))
+  );
+  const variableInfo = new Map();
+  if (variableIds.length) {
+    const varRows = await snGetMany(
+      "item_option_new",
+      "sys_idIN" + variableIds.join(","),
+      "sys_id,name,question_text",
+      variableIds.length,
+      { displayAll: true, excludeRefLinks: true }
+    );
+    varRows.forEach((r) => {
+      variableInfo.set(snFieldValue(r, "sys_id"), {
+        name: snFieldValue(r, "name"),
+        label: snFieldDisplay(r, "question_text"),
+      });
+    });
+  }
+
   const rows = [];
 
   clientRows.forEach((row) => {
     const order = parseVariableOrder(snFieldValue(row, "order"));
+    const variableId = snFieldValue(row, "variable");
+    const info = variableInfo.get(variableId) || {};
     rows.push({
       kind: "client",
       id: snFieldValue(row, "sys_id"),
       name: snFieldDisplay(row, "name"),
       subtype: snFieldDisplay(row, "type"),
-      variable: snFieldValue(row, "variable"),
+      variable: variableId,
+      variableName: info.name || "",
+      variableLabel: info.label || "",
       boundTo: catalogBoundTo(row, "cat_item", catalogItemSysId, setNames),
       active: snBool(row, "active"),
       views: catalogViewFlags(row),
@@ -1668,6 +1695,8 @@ async function fetchCatalogAffectingLogic(catalogItemSysId) {
       name: snFieldDisplay(row, "short_description"),
       subtype: extras.join(" · "),
       variable: "",
+      variableName: "",
+      variableLabel: "",
       boundTo: catalogBoundTo(row, "catalog_item", catalogItemSysId, setNames),
       active: snBool(row, "active"),
       views: catalogViewFlags(row),
