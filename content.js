@@ -1569,9 +1569,21 @@ async function showHiddenPortalVariables() {
  * ===================================================================== */
 
 const CATALOG_CLIENT_FIELDS = [
-  "sys_id", "name", "type", "variable", "cat_item", "variable_set",
+  "sys_id", "name", "type", "cat_variable", "variable", "cat_item", "variable_set",
   "active", "order", "applies_catalog", "applies_sc_task", "applies_req_item",
 ].join(",");
+
+// The onChange-watched variable column differs across ServiceNow versions
+// (`cat_variable` vs `variable`), and reference values sometimes carry an
+// `IO:` prefix. Return the first candidate that resolves to a sys_id.
+function catalogWatchedVariableId(row) {
+  for (const field of ["cat_variable", "variable"]) {
+    let value = snFieldValue(row, field).trim();
+    if (value.indexOf("IO:") === 0) value = value.slice(3);
+    if (isSysId(value)) return value;
+  }
+  return "";
+}
 
 const CATALOG_UIP_FIELDS = [
   "sys_id", "short_description", "catalog_item", "variable_set",
@@ -1642,7 +1654,7 @@ async function fetchCatalogAffectingLogic(catalogItemSysId) {
   // (and its question label). The `variable` field is a reference to
   // item_option_new, so raw is a sys_id; ungrouped it reads as noise.
   const variableIds = Array.from(
-    new Set(clientRows.map((row) => snFieldValue(row, "variable")).filter(isSysId))
+    new Set(clientRows.map((row) => catalogWatchedVariableId(row)).filter(isSysId))
   );
   const variableInfo = new Map();
   if (variableIds.length) {
@@ -1665,7 +1677,7 @@ async function fetchCatalogAffectingLogic(catalogItemSysId) {
 
   clientRows.forEach((row) => {
     const order = parseVariableOrder(snFieldValue(row, "order"));
-    const variableId = snFieldValue(row, "variable");
+    const variableId = catalogWatchedVariableId(row);
     const info = variableInfo.get(variableId) || {};
     rows.push({
       kind: "client",
