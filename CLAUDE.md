@@ -75,8 +75,17 @@ the caller falls back gracefully.
   branches must remain intact after merges and during cleanup. Cleanup may
   delete a local branch only; it must never use `git push --delete`, GitHub's
   branch deletion controls, or any equivalent remote-branch deletion action.
-- When the user asks to deploy, publish, or "commit and push" a feature branch
-  to GitHub, default to the full workflow: validate and commit the branch, push
+- **IMPORTANT — Building is not deploying. Never push, open a PR, merge, or tag
+  without an explicit, separate instruction to do so.** "Build this", "implement
+  this", "go ahead", "fix it", and similar are authorization to write code
+  LOCALLY only. Stop after committing to the local feature branch and hand it
+  back so the user can load the extension and test it in their own browser.
+  Nothing reaches GitHub — no `git push`, no `gh pr create`, no `gh pr merge`,
+  no `git tag`/tag push — until the user, having had the chance to test, asks
+  to deploy/publish/"commit and push"/"raise a PR". When in doubt, ask; do not
+  assume. The user tests the real extension before anything is shared.
+- When the user DOES ask to deploy, publish, or "commit and push" a feature
+  branch to GitHub, run the full workflow: validate and commit the branch, push
   it, open a pull request to `main`, merge and verify the pull request, then
   fetch, switch to, and fast-forward local `main`. A successful branch push
   alone is not completion. Stop after pushing the feature branch only when the
