@@ -53,6 +53,13 @@
       border-bottom:1px solid #292944;color:#aaaac1;font-size:11px;
     }
     .summary strong{color:#f0f0fa;font-size:13px;margin-right:4px}
+    .summary .muted{color:#7d7d95}
+    .summary .muted strong{color:#c6c6d8}
+    .summary .chip-warn{
+      color:#e0c187;background:#332c1b;border:1px solid #574a2c;
+      border-radius:5px;padding:2px 8px;
+    }
+    .summary .chip-warn strong{color:#f0d79b}
     .warning{margin-left:auto;color:#d2b779}
     .controls{
       display:flex;align-items:center;gap:8px;padding:10px 14px;
@@ -111,6 +118,7 @@
     }
     .row:hover{background:#26263e}
     .row.inactive{opacity:.55}
+    .row.flagged{box-shadow:inset 3px 0 0 #a5842f}
     .row-name{min-width:0}
     .row-title{
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#f0f0fa;
@@ -143,6 +151,7 @@
     .tag{padding:2px 6px;border-radius:4px;background:#252539;border:1px solid #34344f;white-space:nowrap}
     .tag.off{color:#ff9d9d;background:#3a2530;border-color:#5c3a48}
     .tag.on{color:#b5e4c2;background:#263b35;border-color:#39594d}
+    .tag.warn{color:#f0d79b;background:#3a3320;border-color:#5c5031;cursor:help}
     .empty{padding:48px 20px;text-align:center;color:#74748b;font-size:13px}
     .toolbar{
       display:flex;align-items:center;gap:8px;padding:11px 14px;
@@ -224,9 +233,30 @@
     return out;
   };
 
+  // "Why isn't this firing?" — evaluated against the catalog order form, the
+  // runtime this panel is opened from. Returns null when nothing blocks it.
+  const firingIssue = (row) => {
+    if (!row.active) {
+      return { short: "Inactive", detail: "Inactive — this never runs." };
+    }
+    if (row.views && !row.views.catalog) {
+      const where = [];
+      if (row.views.task) where.push("Task");
+      if (row.views.ritm) where.push("RITM");
+      const scope = where.length ? where.join(" / ") + " only" : "no catalog views";
+      return {
+        short: "Not on catalog form",
+        detail: "Won't run while ordering this item — scoped to " + scope + ".",
+      };
+    }
+    return null;
+  };
+
   const buildRowEl = (row) => {
+    const issue = firingIssue(row);
     const el = document.createElement("div");
-    el.className = "row" + (row.active ? "" : " inactive");
+    el.className =
+      "row" + (row.active ? "" : " inactive") + (issue && row.active ? " flagged" : "");
     el.title = "Open the " + KIND_LABEL[row.kind].toLowerCase() + " record";
 
     // Name + bound-to + (policies) condition preview.
@@ -277,6 +307,7 @@
     const activeTag = document.createElement("span");
     activeTag.className = "tag " + (row.active ? "on" : "off");
     activeTag.textContent = row.active ? "Active" : "Inactive";
+    if (!row.active && issue) activeTag.title = issue.detail;
     metaCell.append(activeTag);
     viewTags(row).forEach((v) => {
       const t = document.createElement("span");
@@ -284,6 +315,14 @@
       t.textContent = v;
       metaCell.append(t);
     });
+    // Active but blocked from this form (e.g. RITM-only): say why, at a glance.
+    if (row.active && issue) {
+      const warn = document.createElement("span");
+      warn.className = "tag warn";
+      warn.textContent = "⚠ " + issue.short;
+      warn.title = issue.detail;
+      metaCell.append(warn);
+    }
     if (row.orderKnown) {
       const ord = document.createElement("span");
       ord.className = "tag";
@@ -425,6 +464,7 @@
         row.active ? "active" : "inactive",
       ].filter(Boolean);
       let line = bits.join(" — ");
+      if (row.active && row.views && !row.views.catalog) line += " — won't run on catalog form";
       if (row.conditions) line += " — if: " + row.conditions;
       lines.push(line);
     });
@@ -471,6 +511,10 @@
     const rows = result.rows || [];
     const clientCount = rows.filter((r) => r.kind === "client").length;
     const uipCount = rows.filter((r) => r.kind === "uip").length;
+    const inactiveCount = rows.filter((r) => !r.active).length;
+    const notFiringCount = rows.filter(
+      (r) => r.active && r.views && !r.views.catalog
+    ).length;
     const setsNote = result.setCount
       ? result.setCount + (result.setCount === 1 ? " variable set" : " variable sets")
       : "";
@@ -494,6 +538,8 @@
             <span><strong data-count="total">0</strong>total</span>
             <span><strong data-count="client">0</strong>client scripts</span>
             <span><strong data-count="uip">0</strong>UI policies</span>
+            <span class="muted" data-count-wrap="inactive"><strong data-count="inactive">0</strong>inactive</span>
+            <span class="chip-warn" data-count-wrap="notfiring" title="Active, but scoped to RITM/Task views — won't run while ordering this item."><strong data-count="notfiring">0</strong>won't run here</span>
             ${setsNote ? "<span>" + setsNote + "</span>" : ""}
             ${result.itemName ? '<span style="margin-left:auto;color:#8f8fb0">' + result.itemName + "</span>" : ""}
           </div>
@@ -528,6 +574,16 @@
     writeCount("total", rows.length);
     writeCount("client", clientCount);
     writeCount("uip", uipCount);
+    writeCount("inactive", inactiveCount);
+    writeCount("notfiring", notFiringCount);
+
+    // The inactive / won't-run chips are noise when zero — hide them.
+    const setWrapVisible = (key, visible) => {
+      const wrap = resultsShadow.querySelector("[data-count-wrap='" + key + "']");
+      if (wrap) wrap.style.display = visible ? "" : "none";
+    };
+    setWrapVisible("inactive", inactiveCount > 0);
+    setWrapVisible("notfiring", notFiringCount > 0);
 
     resultsShadow.querySelectorAll("[data-filter]").forEach((button) => {
       button.addEventListener("click", () => {
