@@ -154,15 +154,17 @@
     .tag.warn{color:#f0d79b;background:#3a3320;border-color:#5c5031;cursor:help}
     .empty{padding:48px 20px;text-align:center;color:#74748b;font-size:13px}
     .toolbar{
-      display:flex;align-items:center;gap:8px;padding:11px 14px;
+      display:flex;align-items:center;gap:8px;padding:11px 14px;flex-wrap:wrap;
       border-top:1px solid #2e2e4e;background:#1b1b2b;
     }
-    .toolbar-note{font-size:11px;color:#67677e;flex:1}
+    .toolbar-note{font-size:11px;color:#67677e;flex:1;min-width:140px}
     .toolbar button{
       border:1px solid #3a3a5c;background:#292941;color:#d8d8ea;
       border-radius:6px;padding:6px 9px;cursor:pointer;font-size:12px;
     }
     .toolbar button:hover{background:#343453;color:#fff}
+    .toolbar button:disabled{opacity:.4;cursor:not-allowed}
+    .toolbar button:disabled:hover{background:#292941;color:#d8d8ea}
     .toolbar .primary{background:#4b4b91;border-color:#6565b5;color:#fff}
     .toolbar .primary:hover{background:#5959a5}
     @media(max-width:640px){
@@ -218,6 +220,26 @@
     const table = RECORD_TABLE[row.kind];
     if (!table || !row.id) return;
     const url = location.origin + "/" + table + ".do?sys_id=" + encodeURIComponent(row.id);
+    try {
+      chrome.runtime.sendMessage({ type: "OPEN_URL", url });
+    } catch (e) {
+      window.open(url, "_blank", "noopener");
+    }
+  };
+
+  // Open the whole filtered set in the platform list, mirroring the exact
+  // query fetchCatalogAffectingLogic used (item plus any attached variable
+  // sets). Complements the per-row click-through.
+  const openList = (kind) => {
+    const table = RECORD_TABLE[kind];
+    const itemId = lastResult && lastResult.itemSysId;
+    if (!table || !itemId) return;
+    const itemField = kind === "client" ? "cat_item" : "catalog_item";
+    const setIds = (lastResult && lastResult.setIds) || [];
+    let query = itemField + "=" + itemId;
+    if (setIds.length) query += "^ORvariable_setIN" + setIds.join(",");
+    const url =
+      location.origin + "/" + table + "_list.do?sysparm_query=" + encodeURIComponent(query);
     try {
       chrome.runtime.sendMessage({ type: "OPEN_URL", url });
     } catch (e) {
@@ -560,6 +582,8 @@
           <div class="rows"></div>
           <footer class="toolbar">
             <span class="toolbar-note">Read-only — nothing here runs or edits the logic.</span>
+            <button type="button" data-action="open-scripts" title="Open catalog_script_client filtered to this item, in the platform">Scripts in platform ↗</button>
+            <button type="button" data-action="open-policies" title="Open catalog_ui_policy filtered to this item, in the platform">Policies in platform ↗</button>
             <button type="button" data-action="close">Close</button>
             <button class="primary" type="button" data-action="copy">Copy list</button>
           </footer>
@@ -629,6 +653,17 @@
     if (closeButton) closeButton.addEventListener("click", closeResults);
     if (footerClose) footerClose.addEventListener("click", closeResults);
     if (copyButton) copyButton.addEventListener("click", () => copyList().catch(() => {}));
+
+    const scriptsButton = resultsShadow.querySelector("[data-action='open-scripts']");
+    const policiesButton = resultsShadow.querySelector("[data-action='open-policies']");
+    if (scriptsButton) {
+      scriptsButton.disabled = clientCount === 0;
+      scriptsButton.addEventListener("click", () => openList("client"));
+    }
+    if (policiesButton) {
+      policiesButton.disabled = uipCount === 0;
+      policiesButton.addEventListener("click", () => openList("uip"));
+    }
 
     const overlay = resultsShadow.querySelector(".overlay");
     if (overlay) {

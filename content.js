@@ -1716,7 +1716,7 @@ async function fetchCatalogAffectingLogic(catalogItemSysId) {
       String(a.name).localeCompare(String(b.name))
   );
 
-  return { rows, setCount: setIds.length };
+  return { rows, setCount: setIds.length, setIds };
 }
 
 async function showCatalogInsight() {
@@ -1728,7 +1728,7 @@ async function showCatalogInsight() {
 
   showToast("Reading catalog client scripts and UI policies...", false, 6000);
   try {
-    const { rows, setCount } = await fetchCatalogAffectingLogic(catalogItemSysId);
+    const { rows, setCount, setIds } = await fetchCatalogAffectingLogic(catalogItemSysId);
     let itemName = "";
     try {
       const itemRows = await snGetMany(
@@ -1743,7 +1743,13 @@ async function showCatalogInsight() {
       /* name is cosmetic; ignore */
     }
 
-    globalThis.SNCatalogInsightUI.showResults({ rows, setCount, itemName });
+    globalThis.SNCatalogInsightUI.showResults({
+      rows,
+      setCount,
+      itemName,
+      itemSysId: catalogItemSysId,
+      setIds,
+    });
     closePalette();
   } catch (error) {
     showToast(String(error && error.message ? error.message : error), true);
