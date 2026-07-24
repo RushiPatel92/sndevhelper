@@ -27,7 +27,11 @@
 
   const UI_CSS = `
     *{box-sizing:border-box}
-    :host{all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    :host{
+      all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      /* Teal = selection/focus; pink = primary action. */
+      --teal:#31d4c4;--pink:#ff6fae;
+    }
     button,input{font:inherit}
     .overlay{
       position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.52);
@@ -69,27 +73,34 @@
     }
     .filters{display:flex;gap:6px;flex-wrap:wrap}
     .filter{
-      border:1px solid #3a3a5c;background:#292941;color:#9898b2;
+      border:1px solid #68689a;background:#3f4067;color:#e6e6f5;
       border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;
     }
-    .filter:hover{background:#343453;color:#fff}
-    .filter.active{background:#373766;border-color:#6262a1;color:#fff}
+    .filter:hover{background:#4a4b78;color:#fff}
+    .filter.active{
+      background:color-mix(in srgb, var(--teal) 30%, #23303a);
+      border-color:var(--teal);color:#eafffb;
+      box-shadow:0 0 0 1px color-mix(in srgb, var(--teal) 40%, transparent);
+    }
     .toggle{
-      border:1px solid #3a3a5c;background:#292941;color:#9898b2;
+      border:1px solid #68689a;background:#3f4067;color:#e6e6f5;
       border-radius:6px;padding:5px 9px;cursor:pointer;font-size:11px;
       display:inline-flex;align-items:center;gap:6px;
     }
-    .toggle:hover{background:#343453;color:#fff}
-    .toggle.active{background:#2a3d33;border-color:#3d6b52;color:#bfe6ce}
+    .toggle:hover{background:#4a4b78;color:#fff}
+    .toggle.active{
+      background:color-mix(in srgb, var(--teal) 28%, #23303a);
+      border-color:var(--teal);color:#eafffb;
+    }
     .toggle .dot{width:7px;height:7px;border-radius:50%;background:#55556f}
-    .toggle.active .dot{background:#5fcf90}
+    .toggle.active .dot{background:var(--teal)}
     .search{
-      margin-left:auto;width:230px;max-width:38vw;background:#151522;
-      border:1px solid #353553;border-radius:6px;color:#e5e5f4;
+      margin-left:auto;width:230px;max-width:38vw;background:#313150;
+      border:1px solid #575780;border-radius:6px;color:#f0f0fa;
       outline:none;padding:7px 9px;font-size:12px;
     }
-    .search:focus{border-color:#6767aa}
-    .search::placeholder{color:#64647b}
+    .search:focus{border-color:var(--teal);background:#37375a}
+    .search::placeholder{color:#a4a4be}
     .rows{flex:1;overflow:auto;padding:6px 0}
     .row{
       display:grid;grid-template-columns:1fr 130px 140px 1fr;gap:12px;
@@ -136,8 +147,11 @@
       border-radius:6px;padding:6px 9px;cursor:pointer;font-size:12px;
     }
     .toolbar button:hover{background:#343453;color:#fff}
-    .toolbar .primary{background:#4b4b91;border-color:#6565b5;color:#fff}
-    .toolbar .primary:hover{background:#5959a5}
+    .toolbar .primary{
+      background:color-mix(in srgb, var(--pink) 82%, #3a2740);
+      border-color:color-mix(in srgb, var(--pink) 70%, #5a3a4c);color:#fff;
+    }
+    .toolbar .primary:hover{background:color-mix(in srgb, var(--pink) 92%, #3a2740)}
     @media(max-width:640px){
       .overlay{padding:8px}.panel{width:100%;height:calc(100vh - 16px)}
       .header{padding:14px}.summary{padding:9px 14px;gap:10px;flex-wrap:wrap}

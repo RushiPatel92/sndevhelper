@@ -2316,6 +2316,9 @@ const PALETTE_CSS = `
   *{box-sizing:border-box;margin:0;padding:0}
   :host{
     all:initial;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    /* Two-accent system: teal = structure/selection/focus, pink = brand/pinned. */
+    --teal:#31d4c4;
+    --pink:#ff6fae;
     --palette-bg:#181a24;
     --palette-input:#10121a;
     --palette-raised:#252938;
@@ -2326,8 +2329,8 @@ const PALETTE_CSS = `
     --palette-secondary:#b4bbcc;
     --palette-muted:#a3aabe;
     --palette-placeholder:#929aae;
-    --palette-accent:#b2b2ff;
-    --palette-favorite:#ffd36a;
+    --palette-accent:var(--teal);
+    --palette-favorite:var(--pink);
     --palette-selected:#34385a;
     --palette-hover:#262a3a;
   }
@@ -2348,7 +2351,7 @@ const PALETTE_CSS = `
   }
   #palette-head.dragging{cursor:grabbing}
   #palette-kicker{
-    color:var(--palette-muted);font-size:10px;font-weight:800;letter-spacing:.12em;
+    color:var(--pink);font-size:10px;font-weight:800;letter-spacing:.12em;
     line-height:1.2;text-transform:uppercase;
   }
   #palette-title{
@@ -2373,7 +2376,7 @@ const PALETTE_CSS = `
     background:var(--palette-input);gap:10px;
   }
   #search-wrap:focus-within{
-    border-color:#8f91ff;box-shadow:0 0 0 3px rgba(143,145,255,.18);
+    border-color:var(--teal);box-shadow:0 0 0 3px color-mix(in srgb, var(--teal) 22%, transparent);
   }
   #search{
     flex:1;background:transparent;border:none;outline:none;
@@ -2386,8 +2389,13 @@ const PALETTE_CSS = `
     scrollbar-color:#596078 transparent;scrollbar-width:thin;
   }
   .group-label{
-    color:var(--palette-secondary);font-size:10px;font-weight:800;letter-spacing:.1em;
-    text-transform:uppercase;padding:12px 10px 5px;
+    display:flex;align-items:center;gap:11px;
+    color:color-mix(in srgb, var(--teal) 74%, #d2d6e2);font-size:10px;font-weight:800;
+    letter-spacing:.14em;text-transform:uppercase;padding:13px 10px 6px;
+  }
+  .group-label::after{
+    content:"";flex:1;height:1px;
+    background:linear-gradient(90deg, color-mix(in srgb, var(--teal) 34%, transparent), transparent);
   }
   .cmd{
     position:relative;display:flex;align-items:center;min-height:38px;padding:8px 11px;
@@ -2395,8 +2403,9 @@ const PALETTE_CSS = `
     border-radius:7px;transition:background .08s,border-color .08s,color .08s;
   }
   .cmd.active{
-    background:var(--palette-selected);border-color:#676da3;color:#fff;
-    box-shadow:inset 3px 0 0 var(--palette-accent);
+    background:color-mix(in srgb, var(--teal) 12%, var(--palette-selected));
+    border-color:color-mix(in srgb, var(--teal) 42%, var(--palette-border));
+    color:#fff;box-shadow:inset 3px 0 0 var(--palette-accent);
   }
   .cmd:hover:not(.active){background:var(--palette-hover)}
   .cmd-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2422,7 +2431,7 @@ const PALETTE_CSS = `
     width:100%;background:var(--palette-input);border:1px solid var(--palette-border);border-radius:7px;outline:none;
     color:var(--palette-text);font-size:13px;padding:9px 10px;
   }
-  #arg-input:focus{border-color:#8f91ff;box-shadow:0 0 0 3px rgba(143,145,255,.18)}
+  #arg-input:focus{border-color:var(--teal);box-shadow:0 0 0 3px color-mix(in srgb, var(--teal) 22%, transparent)}
   #arg-input::placeholder{color:var(--palette-placeholder)}
   #toast{
     display:none;padding:10px 16px;font-size:12px;
