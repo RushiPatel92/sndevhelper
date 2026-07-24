@@ -16,6 +16,8 @@
   let activeFilter = "all";
   let searchQuery = "";
   let hideInactive = false;
+  let groupByVariable = false;
+  const collapsedGroups = new Set();
 
   const KIND_LABEL = { client: "Client script", uip: "UI policy" };
   const RECORD_TABLE = { client: "catalog_script_client", uip: "catalog_ui_policy" };
@@ -51,6 +53,13 @@
       border-bottom:1px solid #292944;color:#aaaac1;font-size:11px;
     }
     .summary strong{color:#f0f0fa;font-size:13px;margin-right:4px}
+    .summary .muted{color:#7d7d95}
+    .summary .muted strong{color:#c6c6d8}
+    .summary .chip-warn{
+      color:#e0c187;background:#332c1b;border:1px solid #574a2c;
+      border-radius:5px;padding:2px 8px;
+    }
+    .summary .chip-warn strong{color:#f0d79b}
     .warning{margin-left:auto;color:#d2b779}
     .controls{
       display:flex;align-items:center;gap:8px;padding:10px 14px;
@@ -80,6 +89,28 @@
     .search:focus{border-color:#6767aa}
     .search::placeholder{color:#64647b}
     .rows{flex:1;overflow:auto;padding:6px 0}
+    .group{border-bottom:1px solid #23233a}
+    .group-head{
+      display:flex;align-items:center;gap:9px;padding:9px 16px;cursor:pointer;
+      background:#202034;position:sticky;top:0;z-index:1;user-select:none;
+    }
+    .group-head:hover{background:#26263e}
+    .group-caret{color:#8686a6;font-size:10px;width:10px;flex:none}
+    .group-name{
+      font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:#dcdcf2;
+      font-weight:600;white-space:nowrap;flex:none;
+    }
+    .group-label{
+      font-size:11px;color:#8585a0;min-width:0;cursor:pointer;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+    .group-label.expanded{white-space:normal;overflow:visible;color:#b6b6d0}
+    .group-label:hover{color:#c9c9e8}
+    .group-count{
+      margin-left:auto;flex:none;background:#33334f;color:#c8c8e2;
+      border-radius:10px;padding:1px 9px;font-size:11px;
+    }
+    .group-rows .row{padding-left:30px}
     .row{
       display:grid;grid-template-columns:1fr 168px 150px;gap:12px;
       align-items:center;padding:10px 18px;border-bottom:1px solid #292941;
@@ -87,6 +118,7 @@
     }
     .row:hover{background:#26263e}
     .row.inactive{opacity:.55}
+    .row.flagged{box-shadow:inset 3px 0 0 #a5842f}
     .row-name{min-width:0}
     .row-title{
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#f0f0fa;
@@ -119,17 +151,20 @@
     .tag{padding:2px 6px;border-radius:4px;background:#252539;border:1px solid #34344f;white-space:nowrap}
     .tag.off{color:#ff9d9d;background:#3a2530;border-color:#5c3a48}
     .tag.on{color:#b5e4c2;background:#263b35;border-color:#39594d}
+    .tag.warn{color:#f0d79b;background:#3a3320;border-color:#5c5031;cursor:help}
     .empty{padding:48px 20px;text-align:center;color:#74748b;font-size:13px}
     .toolbar{
-      display:flex;align-items:center;gap:8px;padding:11px 14px;
+      display:flex;align-items:center;gap:8px;padding:11px 14px;flex-wrap:wrap;
       border-top:1px solid #2e2e4e;background:#1b1b2b;
     }
-    .toolbar-note{font-size:11px;color:#67677e;flex:1}
+    .toolbar-note{font-size:11px;color:#67677e;flex:1;min-width:140px}
     .toolbar button{
       border:1px solid #3a3a5c;background:#292941;color:#d8d8ea;
       border-radius:6px;padding:6px 9px;cursor:pointer;font-size:12px;
     }
     .toolbar button:hover{background:#343453;color:#fff}
+    .toolbar button:disabled{opacity:.4;cursor:not-allowed}
+    .toolbar button:disabled:hover{background:#292941;color:#d8d8ea}
     .toolbar .primary{background:#4b4b91;border-color:#6565b5;color:#fff}
     .toolbar .primary:hover{background:#5959a5}
     @media(max-width:640px){
@@ -154,10 +189,25 @@
   const allRows = () => (lastResult && lastResult.rows) || [];
 
   const rowSearchText = (row) =>
-    [row.name, KIND_LABEL[row.kind], row.subtype, row.variable, row.boundTo, row.conditions]
+    [
+      row.name,
+      KIND_LABEL[row.kind],
+      row.subtype,
+      row.variableName,
+      row.variableLabel,
+      row.boundTo,
+      row.conditions,
+    ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
+
+  // How the "Group by variable" view keys each row. onChange client scripts
+  // watch a specific variable; everything else (onLoad/onSubmit, UI policies)
+  // shares the "not variable-specific" bucket.
+  const NO_VARIABLE = " none";
+  const groupKeyOf = (row) =>
+    row.kind === "client" && row.variable ? row.variableName || row.variable : NO_VARIABLE;
 
   const filteredRows = () =>
     allRows().filter((row) => {
@@ -177,12 +227,227 @@
     }
   };
 
+  // Open the whole filtered set in the platform list, mirroring the exact
+  // query fetchCatalogAffectingLogic used (item plus any attached variable
+  // sets). Complements the per-row click-through.
+  const openList = (kind) => {
+    const table = RECORD_TABLE[kind];
+    const itemId = lastResult && lastResult.itemSysId;
+    if (!table || !itemId) return;
+    const itemField = kind === "client" ? "cat_item" : "catalog_item";
+    const setIds = (lastResult && lastResult.setIds) || [];
+    let query = itemField + "=" + itemId;
+    if (setIds.length) query += "^ORvariable_setIN" + setIds.join(",");
+    const url =
+      location.origin + "/" + table + "_list.do?sysparm_query=" + encodeURIComponent(query);
+    try {
+      chrome.runtime.sendMessage({ type: "OPEN_URL", url });
+    } catch (e) {
+      window.open(url, "_blank", "noopener");
+    }
+  };
+
   const viewTags = (row) => {
     const out = [];
     if (row.views && row.views.catalog) out.push("Catalog");
     if (row.views && row.views.task) out.push("Task");
     if (row.views && row.views.ritm) out.push("RITM");
     return out;
+  };
+
+  // "Why isn't this firing?" — evaluated against the catalog order form, the
+  // runtime this panel is opened from. Returns null when nothing blocks it.
+  const firingIssue = (row) => {
+    if (!row.active) {
+      return { short: "Inactive", detail: "Inactive — this never runs." };
+    }
+    if (row.views && !row.views.catalog) {
+      const where = [];
+      if (row.views.task) where.push("Task");
+      if (row.views.ritm) where.push("RITM");
+      const scope = where.length ? where.join(" / ") + " only" : "no catalog views";
+      return {
+        short: "Not on catalog form",
+        detail: "Won't run while ordering this item — scoped to " + scope + ".",
+      };
+    }
+    return null;
+  };
+
+  const buildRowEl = (row) => {
+    const issue = firingIssue(row);
+    const el = document.createElement("div");
+    el.className =
+      "row" + (row.active ? "" : " inactive") + (issue && row.active ? " flagged" : "");
+    el.title = "Open the " + KIND_LABEL[row.kind].toLowerCase() + " record";
+
+    // Name + bound-to + (policies) condition preview.
+    const nameCell = document.createElement("div");
+    nameCell.className = "row-name";
+    const titleEl = document.createElement("div");
+    titleEl.className = "row-title";
+    const titleText = document.createElement("span");
+    titleText.textContent = row.name || "(unnamed)";
+    titleText.style.cssText =
+      "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0";
+    const openHint = document.createElement("span");
+    openHint.className = "open-hint";
+    openHint.textContent = "↗";
+    titleEl.append(titleText, openHint);
+    const boundEl = document.createElement("div");
+    boundEl.className = "row-bound";
+    boundEl.textContent = row.boundTo;
+    boundEl.title = row.boundTo;
+    nameCell.append(titleEl, boundEl);
+    if (row.conditions) {
+      const condEl = document.createElement("div");
+      condEl.className = "row-cond";
+      condEl.textContent = "if: " + row.conditions;
+      condEl.title = row.conditions;
+      nameCell.append(condEl);
+    }
+
+    // Kind + subtype (onLoad/onChange… or "UI policy").
+    const kindCell = document.createElement("div");
+    kindCell.className = "kindcell";
+    const kindBadge = document.createElement("span");
+    kindBadge.className = "badge " + row.kind;
+    kindBadge.textContent = KIND_LABEL[row.kind];
+    kindCell.append(kindBadge);
+    if (row.subtype) {
+      const sub = document.createElement("span");
+      sub.className = "subtype";
+      const watched = row.kind === "client" ? row.variableName || row.variable : "";
+      sub.textContent = row.subtype + (watched ? " · " + watched : "");
+      sub.title = sub.textContent;
+      kindCell.append(sub);
+    }
+
+    // Active + views + order.
+    const metaCell = document.createElement("div");
+    metaCell.className = "metacell";
+    const activeTag = document.createElement("span");
+    activeTag.className = "tag " + (row.active ? "on" : "off");
+    activeTag.textContent = row.active ? "Active" : "Inactive";
+    if (!row.active && issue) activeTag.title = issue.detail;
+    metaCell.append(activeTag);
+    viewTags(row).forEach((v) => {
+      const t = document.createElement("span");
+      t.className = "tag";
+      t.textContent = v;
+      metaCell.append(t);
+    });
+    // Active but blocked from this form (e.g. RITM-only): say why, at a glance.
+    if (row.active && issue) {
+      const warn = document.createElement("span");
+      warn.className = "tag warn";
+      warn.textContent = "⚠ " + issue.short;
+      warn.title = issue.detail;
+      metaCell.append(warn);
+    }
+    if (row.orderKnown) {
+      const ord = document.createElement("span");
+      ord.className = "tag";
+      ord.textContent = "#" + row.order;
+      metaCell.append(ord);
+    }
+
+    el.append(nameCell, kindCell, metaCell);
+    el.addEventListener("click", () => openRecord(row));
+    return el;
+  };
+
+  const renderEmpty = (list) => {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = allRows().length
+      ? "Nothing matches these filters."
+      : "No catalog client scripts or UI policies target this item.";
+    list.appendChild(empty);
+  };
+
+  const renderFlat = (list, rows) => {
+    rows.forEach((row) => list.appendChild(buildRowEl(row)));
+  };
+
+  // "Group by variable": one section per watched variable, then a trailing
+  // "Not variable-specific" bucket (onLoad/onSubmit + UI policies). Each header
+  // is collapsible; the question label truncates but expands on click.
+  const renderGrouped = (list, rows) => {
+    const groups = new Map();
+    rows.forEach((row) => {
+      const key = groupKeyOf(row);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    });
+
+    const keys = Array.from(groups.keys())
+      .filter((k) => k !== NO_VARIABLE)
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    if (groups.has(NO_VARIABLE)) keys.push(NO_VARIABLE);
+
+    keys.forEach((key) => {
+      const groupRows = groups.get(key);
+      const isNone = key === NO_VARIABLE;
+      const sample = groupRows.find((r) => r.variableName || r.variableLabel) || groupRows[0];
+      const collapsed = collapsedGroups.has(key);
+
+      const group = document.createElement("div");
+      group.className = "group";
+
+      const head = document.createElement("div");
+      head.className = "group-head" + (collapsed ? " collapsed" : "");
+
+      const caret = document.createElement("span");
+      caret.className = "group-caret";
+      caret.textContent = collapsed ? "▸" : "▾";
+      head.append(caret);
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "group-name";
+      nameEl.textContent = isNone
+        ? "Not variable-specific"
+        : sample.variableName || sample.variable;
+      head.append(nameEl);
+
+      const label = !isNone && sample.variableLabel ? sample.variableLabel : "";
+      if (label) {
+        const labelEl = document.createElement("span");
+        labelEl.className = "group-label";
+        labelEl.textContent = label;
+        labelEl.title = label + "  (click to expand)";
+        labelEl.addEventListener("click", (event) => {
+          event.stopPropagation();
+          labelEl.classList.toggle("expanded");
+        });
+        head.append(labelEl);
+      } else if (isNone) {
+        const hint = document.createElement("span");
+        hint.className = "group-label";
+        hint.textContent = "onLoad / onSubmit / UI policies";
+        head.append(hint);
+      }
+
+      const count = document.createElement("span");
+      count.className = "group-count";
+      count.textContent = String(groupRows.length);
+      head.append(count);
+
+      head.addEventListener("click", () => {
+        if (collapsedGroups.has(key)) collapsedGroups.delete(key);
+        else collapsedGroups.add(key);
+        renderRows();
+      });
+      group.append(head);
+
+      if (!collapsed) {
+        const body = document.createElement("div");
+        body.className = "group-rows";
+        groupRows.forEach((row) => body.appendChild(buildRowEl(row)));
+        group.append(body);
+      }
+      list.appendChild(group);
+    });
   };
 
   const renderRows = () => {
@@ -193,86 +458,12 @@
 
     const rows = filteredRows();
     if (!rows.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty";
-      empty.textContent = allRows().length
-        ? "Nothing matches these filters."
-        : "No catalog client scripts or UI policies target this item.";
-      list.appendChild(empty);
+      renderEmpty(list);
       return;
     }
 
-    rows.forEach((row) => {
-      const el = document.createElement("div");
-      el.className = "row" + (row.active ? "" : " inactive");
-      el.title = "Open the " + KIND_LABEL[row.kind].toLowerCase() + " record";
-
-      // Name + bound-to + (policies) condition preview.
-      const nameCell = document.createElement("div");
-      nameCell.className = "row-name";
-      const titleEl = document.createElement("div");
-      titleEl.className = "row-title";
-      const titleText = document.createElement("span");
-      titleText.textContent = row.name || "(unnamed)";
-      titleText.style.cssText =
-        "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0";
-      const openHint = document.createElement("span");
-      openHint.className = "open-hint";
-      openHint.textContent = "↗";
-      titleEl.append(titleText, openHint);
-      const boundEl = document.createElement("div");
-      boundEl.className = "row-bound";
-      boundEl.textContent = row.boundTo;
-      boundEl.title = row.boundTo;
-      nameCell.append(titleEl, boundEl);
-      if (row.conditions) {
-        const condEl = document.createElement("div");
-        condEl.className = "row-cond";
-        condEl.textContent = "if: " + row.conditions;
-        condEl.title = row.conditions;
-        nameCell.append(condEl);
-      }
-
-      // Kind + subtype (onLoad/onChange… or "UI policy").
-      const kindCell = document.createElement("div");
-      kindCell.className = "kindcell";
-      const kindBadge = document.createElement("span");
-      kindBadge.className = "badge " + row.kind;
-      kindBadge.textContent = KIND_LABEL[row.kind];
-      kindCell.append(kindBadge);
-      if (row.subtype) {
-        const sub = document.createElement("span");
-        sub.className = "subtype";
-        sub.textContent =
-          row.subtype + (row.kind === "client" && row.variable ? " · " + row.variable : "");
-        sub.title = sub.textContent;
-        kindCell.append(sub);
-      }
-
-      // Active + views + order.
-      const metaCell = document.createElement("div");
-      metaCell.className = "metacell";
-      const activeTag = document.createElement("span");
-      activeTag.className = "tag " + (row.active ? "on" : "off");
-      activeTag.textContent = row.active ? "Active" : "Inactive";
-      metaCell.append(activeTag);
-      viewTags(row).forEach((v) => {
-        const t = document.createElement("span");
-        t.className = "tag";
-        t.textContent = v;
-        metaCell.append(t);
-      });
-      if (row.orderKnown) {
-        const ord = document.createElement("span");
-        ord.className = "tag";
-        ord.textContent = "#" + row.order;
-        metaCell.append(ord);
-      }
-
-      el.append(nameCell, kindCell, metaCell);
-      el.addEventListener("click", () => openRecord(row));
-      list.appendChild(el);
-    });
+    if (groupByVariable) renderGrouped(list, rows);
+    else renderFlat(list, rows);
   };
 
   const resultsAsText = () => {
@@ -285,14 +476,17 @@
       "",
     ].filter((line) => line !== "");
     rows.forEach((row) => {
+      const watched = row.kind === "client" ? row.variableName || row.variable : "";
+      const subtype = (row.subtype || "") + (watched ? " · " + watched : "");
       const bits = [
         KIND_LABEL[row.kind],
-        row.subtype || "",
+        subtype,
         row.name || "(unnamed)",
         row.boundTo,
         row.active ? "active" : "inactive",
       ].filter(Boolean);
       let line = bits.join(" — ");
+      if (row.active && row.views && !row.views.catalog) line += " — won't run on catalog form";
       if (row.conditions) line += " — if: " + row.conditions;
       lines.push(line);
     });
@@ -333,10 +527,16 @@
     activeFilter = "all";
     searchQuery = "";
     hideInactive = false;
+    groupByVariable = false;
+    collapsedGroups.clear();
 
     const rows = result.rows || [];
     const clientCount = rows.filter((r) => r.kind === "client").length;
     const uipCount = rows.filter((r) => r.kind === "uip").length;
+    const inactiveCount = rows.filter((r) => !r.active).length;
+    const notFiringCount = rows.filter(
+      (r) => r.active && r.views && !r.views.catalog
+    ).length;
     const setsNote = result.setCount
       ? result.setCount + (result.setCount === 1 ? " variable set" : " variable sets")
       : "";
@@ -360,6 +560,8 @@
             <span><strong data-count="total">0</strong>total</span>
             <span><strong data-count="client">0</strong>client scripts</span>
             <span><strong data-count="uip">0</strong>UI policies</span>
+            <span class="muted" data-count-wrap="inactive"><strong data-count="inactive">0</strong>inactive</span>
+            <span class="chip-warn" data-count-wrap="notfiring" title="Active, but scoped to RITM/Task views — won't run while ordering this item."><strong data-count="notfiring">0</strong>won't run here</span>
             ${setsNote ? "<span>" + setsNote + "</span>" : ""}
             ${result.itemName ? '<span style="margin-left:auto;color:#8f8fb0">' + result.itemName + "</span>" : ""}
           </div>
@@ -372,11 +574,16 @@
             <button class="toggle" type="button" data-toggle="active" aria-pressed="false">
               <span class="dot"></span>Active only
             </button>
+            <button class="toggle" type="button" data-toggle="group" aria-pressed="false">
+              <span class="dot"></span>Group by variable
+            </button>
             <input class="search" type="search" placeholder="Search name, type, variable…" aria-label="Search" />
           </div>
           <div class="rows"></div>
           <footer class="toolbar">
             <span class="toolbar-note">Read-only — nothing here runs or edits the logic.</span>
+            <button type="button" data-action="open-scripts" title="Open catalog_script_client filtered to this item, in the platform">Scripts in platform ↗</button>
+            <button type="button" data-action="open-policies" title="Open catalog_ui_policy filtered to this item, in the platform">Policies in platform ↗</button>
             <button type="button" data-action="close">Close</button>
             <button class="primary" type="button" data-action="copy">Copy list</button>
           </footer>
@@ -391,6 +598,16 @@
     writeCount("total", rows.length);
     writeCount("client", clientCount);
     writeCount("uip", uipCount);
+    writeCount("inactive", inactiveCount);
+    writeCount("notfiring", notFiringCount);
+
+    // The inactive / won't-run chips are noise when zero — hide them.
+    const setWrapVisible = (key, visible) => {
+      const wrap = resultsShadow.querySelector("[data-count-wrap='" + key + "']");
+      if (wrap) wrap.style.display = visible ? "" : "none";
+    };
+    setWrapVisible("inactive", inactiveCount > 0);
+    setWrapVisible("notfiring", notFiringCount > 0);
 
     resultsShadow.querySelectorAll("[data-filter]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -412,6 +629,16 @@
       });
     }
 
+    const groupToggle = resultsShadow.querySelector("[data-toggle='group']");
+    if (groupToggle) {
+      groupToggle.addEventListener("click", () => {
+        groupByVariable = !groupByVariable;
+        groupToggle.classList.toggle("active", groupByVariable);
+        groupToggle.setAttribute("aria-pressed", groupByVariable ? "true" : "false");
+        renderRows();
+      });
+    }
+
     const search = resultsShadow.querySelector(".search");
     if (search) {
       search.addEventListener("input", () => {
@@ -426,6 +653,17 @@
     if (closeButton) closeButton.addEventListener("click", closeResults);
     if (footerClose) footerClose.addEventListener("click", closeResults);
     if (copyButton) copyButton.addEventListener("click", () => copyList().catch(() => {}));
+
+    const scriptsButton = resultsShadow.querySelector("[data-action='open-scripts']");
+    const policiesButton = resultsShadow.querySelector("[data-action='open-policies']");
+    if (scriptsButton) {
+      scriptsButton.disabled = clientCount === 0;
+      scriptsButton.addEventListener("click", () => openList("client"));
+    }
+    if (policiesButton) {
+      policiesButton.disabled = uipCount === 0;
+      policiesButton.addEventListener("click", () => openList("uip"));
+    }
 
     const overlay = resultsShadow.querySelector(".overlay");
     if (overlay) {
